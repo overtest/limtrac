@@ -1,0 +1,25 @@
+[package]
+publish = false
+name = "limtrac"
+version = "0.1.0"
+edition = "2018"
+homepage = "https://overtest.github.io/limtrac/"
+repository = "https://github.com/overtest/limtrac/"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+#[lib]
+#name = "limtrac"
+#path = "src/lib/lib.rs"
+#crate-type = ["cdylib"]
+
+[[bin]]
+name = "limtrac"
+path = "src/cli/main.rs"
+
+[dependencies]
+cgroups-rs = "0.2.7"
+libc = "0.2.108"
+syscallz = "0.16.1"
+nanoid = "0.4.0"
+nix = "0.22.1"

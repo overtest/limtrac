@@ -23,7 +23,7 @@ use nix::errno::errno;
 use nix::NixPath;
 use syscallz::Syscall;
 use crate::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, SYS_EXEC_FAILED};
-use crate::helper_functions::panic_on_syscall;
+use crate::constants::TIME_MULTIPLIER;
 
 pub fn kill_on_parent_exit()
 {
@@ -60,7 +60,7 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
     fn try_dup_fd(src_fd: c_int, dst_fd: c_int)
     {
         if unsafe { libc::dup2(src_fd, dst_fd) } == SYS_EXEC_FAILED
-        { panic_on_syscall("dup2"); }
+        { crate::helper_functions::panic_on_syscall!("dup2"); }
     }
 
     fn try_dup_file(dst_fd: c_int, file_path: *const c_char, file_flag : c_int)
@@ -73,36 +73,67 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
 
         // Check whether file opened successfully
         if file_fd == SYS_EXEC_FAILED
-        { panic_on_syscall("open"); }
+        { crate::helper_functions::panic_on_syscall!("open"); }
 
         // Replace specified file descriptor with new one
         try_dup_fd(file_fd, dst_fd);
     }
 }
 
+/*
+ * This function covers the enforcement of system resources usage limits and
+ * policies for the current (child) process, depending on execution request.
+ */
+
 pub fn set_resource_limits(exec_prog_limits : &ExecProgLimits)
 {
-    // TODO: Set processor time, peak working set and other limits
-    /* Set resource limits using `SETRLIMIT` system call */
+    /* @Set total processor time consumption limit */
+    if exec_prog_limits.limit_proc_time > 0
+    {
+        /*
+         * Using RLIMIT_CPU in `setrlimit` system call gives us ability to set
+         * resource limit on the total CPU time consumption of the process in
+         * seconds, but we need to set it in milliseconds. To bypass this issue,
+         * we set limit using that system call in seconds (rounding up the time),
+         * then creating a watchdog thread on child execution started, which
+         * will fetch current CPU time consumption value from time to time, and
+         * can kill a child process if it uses more CPU time than we allow.
+         *
+         * P.S. Note that in BSD systems RLIMIT_CPU sets a limit in milliseconds.
+         */
+        let limit_in_seconds : c_int;
+
+        if (exec_prog_limits.limit_proc_time % TIME_MULTIPLIER) == 0
+        { limit_in_seconds = exec_prog_limits.limit_proc_time / TIME_MULTIPLIER; }
+        else { limit_in_seconds = exec_prog_limits.limit_proc_time / TIME_MULTIPLIER + 1; }
+
+        set_rlimit(libc::RLIMIT_CPU, limit_in_seconds);
+    }
+    /* @/Set total processor time consumption limit */
+    // TODO: Set peak working set and other limits
+
+    /* @Set resource limits using `SETRLIMIT` system call */
     if exec_prog_limits.rlimit_enabled
     {
         set_rlimit(libc::RLIMIT_CORE, exec_prog_limits.rlimit_core);
         set_rlimit(libc::RLIMIT_NPROC, exec_prog_limits.rlimit_npoc);
         set_rlimit(libc::RLIMIT_NOFILE, exec_prog_limits.rlimit_nofile);
-
-        fn set_rlimit(resource: libc::__rlimit_resource_t,
-                      limit_value : c_int)
-        {
-            if limit_value < 0 { return; }
-
-            let rlim_val = limit_value as libc::rlim64_t;
-            let rlim_dat : rlimit64 = rlimit64 { rlim_cur: rlim_val, rlim_max: rlim_val };
-
-            if unsafe { libc::setrlimit64(resource, &rlim_dat) } == SYS_EXEC_FAILED
-            { panic_on_syscall("setrlimit"); }
-        }
     }
-    /* /Set resource limits using `SETRLIMIT` system call */
+    /* @/Set resource limits using `SETRLIMIT` system call */
+
+    /* @Function that utilizes `setrlimit` system call to set resource limit */
+    fn set_rlimit(resource: libc::__rlimit_resource_t,
+                  limit_value : c_int)
+    {
+        if limit_value < 0 { return; }
+
+        let rlim_val = limit_value as libc::rlim64_t;
+        let rlim_dat : rlimit64 = rlimit64 { rlim_cur: rlim_val, rlim_max: rlim_val };
+
+        if unsafe { libc::setrlimit64(resource, &rlim_dat) } == SYS_EXEC_FAILED
+        { crate::helper_functions::panic_on_syscall!("setrlimit"); }
+    }
+    /* @/Function that utilizes `setrlimit` system call to set resource limit */
 }
 
 pub fn init_set_user_id(exec_prog_info : &ExecProgInfo)
@@ -119,7 +150,7 @@ pub fn init_set_user_id(exec_prog_info : &ExecProgInfo)
 
     // Try to execute SETUID system call on the current process
     if unsafe { libc::setuid(user_info.pw_uid) } != 0
-    { panic_on_syscall("setuid"); }
+    { crate::helper_functions::panic_on_syscall!("setuid"); }
 }
 
 pub fn unshare_resources(exec_prog_guard: &ExecProgGuard)
@@ -136,7 +167,7 @@ pub fn unshare_resources(exec_prog_guard: &ExecProgGuard)
             | libc::CLONE_SYSVSEM);
 
         if result == SYS_EXEC_FAILED
-        { panic_on_syscall("unshare"); }
+        { crate::helper_functions::panic_on_syscall!("unshare"); }
     }
 }
 
@@ -165,10 +196,10 @@ pub fn init_set_kill_timer(period: c_int)
         (*sigev_ptr).sigev_signo = libc::SIGKILL;
 
         if libc::timer_create(libc::CLOCK_REALTIME, sigev_ptr, &mut timer_id ) == SYS_EXEC_FAILED
-        { panic_on_syscall("timer_create"); }
+        { crate::helper_functions::panic_on_syscall!("timer_create"); }
 
         if libc::timer_settime(timer_id, 0, &itimer_spec, std::ptr::null_mut()) == SYS_EXEC_FAILED
-        { panic_on_syscall("timer_settime"); }
+        { crate::helper_functions::panic_on_syscall!("timer_settime"); }
     }
 }
 
@@ -185,44 +216,46 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
 {
     if !exec_prog_guard.scmp_enabled { return; }
 
-    // TODO: Support custom list of system calls
-    if !exec_prog_guard.scmp_deny_common { return; }
-
     // Initialize a new SECCOMP context with defaults to 'Allow' policy
     let mut ctx = match syscallz::Context::init_with_action(syscallz::Action::Allow) {
         Ok(ctx) => ctx,
         Err(err) => { panic!("Cannot initialize SECCOMP context: {}", err.to_string()) }
     };
 
-    // Generate a list of common unwanted system calls
-    let syscalls_list = [
-        // Deny creating child processes, changing process ownership, etc.
-        Syscall::fork, Syscall::vfork, Syscall::clone, Syscall::clone3,
-        Syscall::reboot, Syscall::setuid, Syscall::setgid, Syscall::prctl,
-        Syscall::setrlimit, Syscall::prlimit64, // Syscall::getrlimit,
+    /* @Prevent process from using common unwanted system calls */
+    if exec_prog_guard.scmp_deny_common
+    {
+        // Generate a list of common unwanted system calls
+        let syscalls_list = [
+            // Deny creating child processes, changing process ownership, etc.
+            Syscall::fork, Syscall::vfork, Syscall::clone, Syscall::clone3,
+            Syscall::reboot, Syscall::setuid, Syscall::setgid, Syscall::prctl,
+            Syscall::setrlimit, Syscall::prlimit64, // Syscall::getrlimit,
 
-        // Operations on per-process timer are denied
-        Syscall::timer_create, Syscall::timer_gettime, Syscall::timer_settime, Syscall::timer_delete,
-        Syscall::timer_getoverrun, Syscall::timerfd_create, Syscall::timerfd_gettime, Syscall::timerfd_settime,
+            // Operations on per-process timer are denied
+            Syscall::timer_create, Syscall::timer_gettime, Syscall::timer_settime, Syscall::timer_delete,
+            Syscall::timer_getoverrun, Syscall::timerfd_create, Syscall::timerfd_gettime, Syscall::timerfd_settime,
 
-        // Deny using namespaces and unwanted changes to filesystem
-        Syscall::chdir, Syscall::fchdir, Syscall::unshare,
-        Syscall::chmod, Syscall::fchmod, Syscall::fchmodat,
-        Syscall::chown, Syscall::fchown, Syscall::lchown, Syscall::fchownat
-        //Syscall::link, Syscall::unlink
-    ];
+            // Deny using namespaces and unwanted changes to filesystem
+            Syscall::chdir, Syscall::fchdir, Syscall::unshare,
+            Syscall::chmod, Syscall::fchmod, Syscall::fchmodat,
+            Syscall::chown, Syscall::fchown, Syscall::lchown, Syscall::fchownat
+            //Syscall::link, Syscall::unlink
+        ];
 
-    // Enumerate through common system calls list
-    for sys_call in syscalls_list {
-        // Add a 'KillProcess' action filter to every single system call in the list
-        match ctx.set_action_for_syscall(syscallz::Action::KillProcess, sys_call) {
-            Err(err) => { panic!("Cannot add new SECCOMP filter for system call '{}': {}",
-                                 sys_call.into_i32(), err.to_string()) }
-            _ => { /* A new SECCOMP filter successfully added to the current context! */ }
+        // Enumerate through common system calls list
+        for sys_call in syscalls_list {
+            // Add a 'KillProcess' action filter to every single system call in the list
+            match ctx.set_action_for_syscall(syscallz::Action::KillProcess, sys_call) {
+                Err(err) => { panic!("Cannot add new SECCOMP filter for system call '{}': {}",
+                                     sys_call.into_i32(), err.to_string()) }
+                _ => { /* A new SECCOMP filter successfully added to the current context! */ }
+            }
         }
     }
+    /* @/Prevent process from using common unwanted system calls */
 
-    // Try to enforce the SECCOMP policy we built to the current process
+    // Try to enforce the SECCOMP policy we built for the current process
     match ctx.load() {
         Err(err) => { panic!("SECCOMP policy enforcement failed: {}", err.to_string()) }
         _ => { /* SECCOMP context loading finished successfully! */ }

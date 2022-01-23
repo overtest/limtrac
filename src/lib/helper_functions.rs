@@ -16,12 +16,17 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use nix::errno::errno;
-
-pub fn panic_on_syscall(syscall_name: &str)
+/*pub fn panic_on_syscall(syscall_name: &str)
 {
     panic!("System call '{}' failed with 'ERRNO = {}'!", syscall_name.to_uppercase().as_str(), errno());
+}*/
+
+macro_rules! panic_on_syscall {
+    ($($syscall_name:tt)*) => {
+        panic!("System call '{}' failed with 'ERRNO = {}'!", $($syscall_name)*, nix::errno::errno());
+    };
 }
+pub(crate) use panic_on_syscall;
 
 pub fn get_obj_from_ptr<T>(ptr: *const T, msg: &str) -> &T
 {

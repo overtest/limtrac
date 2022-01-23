@@ -17,16 +17,18 @@
  */
 
 use std::time::SystemTime;
-use libc::{c_int, c_ulonglong};
+use libc::{c_int, c_ulonglong, pid_t};
 
 mod constants;
-mod data_models;
 mod sandboxing_features;
 mod helper_functions;
+mod request_structs;
+mod result_structs;
 
 use crate::constants::SYS_EXEC_FAILED;
-use crate::data_models::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, ProcExecResult, ProcResUsage};
-use crate::helper_functions::{get_obj_from_ptr, panic_on_syscall};
+use crate::helper_functions::{get_obj_from_ptr};
+use crate::request_structs::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits};
+use crate::result_structs::{ProcExecResult, ProcResUsage};
 
 #[no_mangle]
 pub extern "C" fn limtrac_execute(
@@ -61,7 +63,7 @@ pub extern "C" fn limtrac_execute(
 
     // If `child_pid` variable equals to '-1', `fork` system call failed!
     if child_pid == SYS_EXEC_FAILED
-    { panic_on_syscall("fork"); }
+    { crate::helper_functions::panic_on_syscall!("fork"); }
 
     // Use `ptrace` syscall to ensure that the child process exits
     // on parent process crash: https://linux.die.net/man/2/ptrace
@@ -71,12 +73,15 @@ pub extern "C" fn limtrac_execute(
     {
         // We are in a child process right now, so we can execute whatever we want
         exec_child_cmd(exec_prog_info, exec_prog_io, exec_prog_limits, exec_prog_guard);
-        // Panicing command won't be executed, no matter of the situation
-        panic!("LIMTRAC execution failed due to an unknown error!");
+        return std::ptr::null_mut();
     }
     /* ===== /[CHILD] PROCESS CODE FRAGMENT ===== */
 
     /* ===== [PARENT] PROCESS CODE FRAGMENT ===== */
+
+    let thread_child_pid : pid_t = child_pid.clone() as pid_t;
+    let thread_exec_prog_limits : &ExecProgLimits = exec_prog_limits.clone();
+    std::thread::spawn(move || exec_watchdog(thread_child_pid, thread_exec_prog_limits)).join().unwrap();
 
     let mut execution_result : ProcExecResult = ProcExecResult::new();
     let mut execution_rusage : ProcResUsage = ProcResUsage::new();
@@ -117,9 +122,11 @@ fn exec_child_cmd(
     exec_prog_limits: &ExecProgLimits,
     exec_prog_guard: &ExecProgGuard)
 {
+    let exec_argv = exec_prog_info.get_program_args_list();
+
     // Change working directory of a child process
     if unsafe { libc::chdir(exec_prog_info.working_dir) } == SYS_EXEC_FAILED
-    { panic_on_syscall("chdir"); }
+    { crate::helper_functions::panic_on_syscall!("chdir"); }
 
     // Execute various resource limiting and sandboxing functions
     crate::sandboxing_features::kill_on_parent_exit();
@@ -131,10 +138,34 @@ fn exec_child_cmd(
     crate::sandboxing_features::init_secure_computing(exec_prog_guard);
 
     // Try to execute program - on success, `execv` never returns
-    let exec_argv = exec_prog_info.get_program_args_list();
     let exec_result = unsafe { libc::execv(exec_prog_info.program_path, exec_argv) };
 
     // Handle an error if `exec` system call failed
     if exec_result == SYS_EXEC_FAILED
-    { panic_on_syscall("execv"); }
+    { crate::helper_functions::panic_on_syscall!("execv"); }
+}
+
+fn exec_watchdog(child_pid: pid_t, _exec_prog_limits: &ExecProgLimits)
+{
+    let mut res_usage_cur = ProcResUsage::new();
+    loop {
+        // Variable used to store a pointer to `rusage` struct
+        let child_rusage_ptr : *mut libc::rusage = std::ptr::null_mut();
+
+        // Try to fetch the current status of child process
+        let child_status = unsafe { libc::wait4(child_pid, std::ptr::null_mut(),
+                                                libc::WNOHANG, child_rusage_ptr) };
+
+        // Panic if `waitpid` system call have failed
+        if child_status == SYS_EXEC_FAILED
+        { crate::helper_functions::panic_on_syscall!("waitpid"); }
+        // Break the loop if child process already exited
+        else if child_status != 0 { break; }
+
+        // Load resources usage into easily redable struct
+        res_usage_cur.load_rusage(child_rusage_ptr);
+
+        // TODO: Check the current resources usage values and
+        // TODO: kill a child process if it exceed the limits.
+    }
 }

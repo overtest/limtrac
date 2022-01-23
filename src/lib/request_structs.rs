@@ -18,7 +18,7 @@
 
 use std::ffi::{CStr, CString};
 use std::path::Path;
-use libc::{c_char, c_int, c_ulonglong};
+use libc::{c_char, c_int};
 use nix::NixPath;
 
 #[repr(C)]
@@ -103,8 +103,8 @@ impl ExecProgIO
     {
         return !self.io_redirected || (
             !self.io_path_stdin.is_null()
-            && !self.io_path_stdout.is_null()
-            && !self.io_path_stderr.is_null());
+                && !self.io_path_stdout.is_null()
+                && !self.io_path_stderr.is_null());
     }
 
     pub fn verify(&self) -> bool
@@ -153,13 +153,13 @@ impl ExecProgIO
 pub struct ExecProgLimits
 {
     pub limit_real_time : c_int, // real execution time
-    pub limit_proc_time : c_int, // processor time
-    pub limit_proc_wset : c_int, // process working set
+pub limit_proc_time : c_int, // processor time
+pub limit_proc_wset : c_int, // process working set
 
     pub rlimit_enabled : bool,   // Set RLIMITs
-    pub rlimit_core : c_int,     // RLIM_CORE
-    pub rlimit_npoc : c_int,     // RLIM_NPROC
-    pub rlimit_nofile : c_int    // RLIM_NOFILE
+pub rlimit_core : c_int,     // RLIM_CORE
+pub rlimit_npoc : c_int,     // RLIM_NPROC
+pub rlimit_nofile : c_int    // RLIM_NOFILE
 }
 
 #[repr(C)]
@@ -168,57 +168,4 @@ pub struct ExecProgGuard
     pub scmp_enabled : bool,
     pub scmp_deny_common : bool,
     pub unshare_enabled : bool
-}
-
-#[repr(C)]
-pub struct ProcExecResult
-{
-    pub exit_code : c_int,
-    pub exit_sign : c_int,
-    pub res_usage : *mut ProcResUsage,
-
-    pub is_killed : bool,
-    pub kill_reason : *const c_char
-}
-
-impl ProcExecResult {
-    pub fn new() -> Self
-    {
-        Self {
-            exit_code: -1,
-            exit_sign: -1,
-            res_usage: std::ptr::null_mut(),
-            is_killed: false,
-            kill_reason: std::ptr::null()
-        }
-    }
-}
-
-#[repr(C)]
-pub struct ProcResUsage
-{
-    pub real_time : c_ulonglong,
-    pub proc_time : c_ulonglong,
-    pub proc_wset : c_int
-}
-
-impl ProcResUsage {
-    pub fn new () -> Self
-    {
-        Self
-        {
-            real_time : 0,
-            proc_time : 0,
-            proc_wset : 0
-        }
-    }
-
-    pub fn load_rusage(&self, res_usage_ptr: *mut libc::rusage)
-    {
-        let _res_usage = match unsafe { res_usage_ptr.as_ref() } {
-            Some(obj) => obj,
-            None => { panic!("Cannot dereference the pointer to 'RUSAGE' structure!") }
-        };
-        // TODO
-    }
 }

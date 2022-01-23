@@ -19,3 +19,4 @@
 use libc::c_int;
 
 pub const SYS_EXEC_FAILED: c_int = -1;
+pub const TIME_MULTIPLIER: c_int = 1000;

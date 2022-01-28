@@ -27,14 +27,33 @@ As it said, you can use `limtrac` either in Rust, or using a binding for one of 
 - **.NET applications:** `.dll targeting dotnet-5`
 - **C/C++ applications:** `.h header file`
 
-### 🏗 Building
+Don't forget that you need `cgroups` and `seccomp` features available and enabled in your development and target environments. Also, to build `limtrac`, you need to install development packages (`libseccomp-dev` and `libcgroup-dev` for `Debian` & `Ubuntu`-based distros).
 
-You can only build `limtrac` in GNU/Linux environment, or under Windows Subsystem for Linux. To build a project, you can use standard Cargo build commands listed below:
+### 🏗 Building library and bindings
 
-- **Debug:** `cargo build`
-- **Release:** `cargo build --release`
+You can build `limtrac` only inside a `GNU/Linux` environment, or under Windows Subsystem for Linux (version 2 recommended). To build a project, you can use standard Cargo build commands. Header file with `C / C++` library bindings will be generated automatically (using `cbindgen` crate).
+
+#### Library and `C/C++` header file:
+```bash
+cargo build           # for development builds
+cargo build --release # for release builds
+```
 
 **Tip:** Use [JetBrains CLion](https://jetbrains.com/clion/) with official Rust plugin & `WSL 2` to build `limtrac` 😃!
+
+### 🎁 Building sample applications
+To build a demo app written in `C`, you need to have `GCC`, `make` and `cmake` in your system.
+```bash
+# Navigate to the directory containing an app
+cd ./examples/demo_c/
+
+# Use a ready-made build script
+bash ./build.sh
+
+# ... or execute these commands yourself:
+mkdir build && cd build
+cmake ../ && make
+```
 
 ### 📃 License
 

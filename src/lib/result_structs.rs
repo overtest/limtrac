@@ -16,7 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use libc::{c_char, c_int, c_long, c_ulonglong};
+use libc::{c_int, c_long, c_ulonglong};
 use crate::constants::TIME_MULTIPLIER;
 
 #[repr(C)]
@@ -27,7 +27,7 @@ pub struct ProcExecResult
     pub res_usage : *mut ProcResUsage,
 
     pub is_killed : bool,
-    pub kill_reason : *const c_char
+    pub kill_reason : c_int
 }
 
 impl ProcExecResult {
@@ -38,7 +38,7 @@ impl ProcExecResult {
             exit_sign: -1,
             res_usage: std::ptr::null_mut(),
             is_killed: false,
-            kill_reason: std::ptr::null()
+            kill_reason: -1
         }
     }
 }
@@ -62,11 +62,8 @@ impl ProcResUsage {
         }
     }
 
-    pub fn load_rusage(&mut self, res_usage_ptr: *mut libc::rusage)
+    pub fn load_rusage(&mut self, res_usage: &libc::rusage)
     {
-        // Try to dereference the pointer to `rusage` struct
-        let res_usage = crate::helper_functions::get_obj_from_ptr(res_usage_ptr, "res_usage");
-
         // Processor time usage is a sum of user-space time and kernel time consumed by a process
         self.proc_time = timeval_to_ms(res_usage.ru_utime) + timeval_to_ms(res_usage.ru_stime);
         // On Windows, this called PeakWorkingSet, on Linux - MaxResidentSetSize

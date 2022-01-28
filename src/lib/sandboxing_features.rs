@@ -17,13 +17,14 @@
  */
 
 use std::ffi::CStr;
+use std::fs::File;
 use std::mem::MaybeUninit;
 use libc::{c_char, c_int, rlimit64, timer_t};
 use nix::errno::errno;
 use nix::NixPath;
 use syscallz::Syscall;
 use crate::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, SYS_EXEC_FAILED};
-use crate::constants::TIME_MULTIPLIER;
+use crate::constants::{SYS_EXEC_OK, TIME_MULTIPLIER};
 
 pub fn kill_on_parent_exit()
 {
@@ -38,6 +39,8 @@ pub fn kill_on_parent_exit()
 
 pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
 {
+    if !exec_prog_io.io_redirected { return; }
+
     const FD_STDIN : c_int = 0;
     const FD_STDOUT : c_int = 1;
     const FD_STDERR : c_int = 2;
@@ -45,38 +48,75 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
     let io_path_stdin = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdin) };
     let io_path_stdout = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdout) };
     let io_path_stderr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stderr) };
-
+    // Standard input stream redirection
     if !io_path_stdin.is_empty()
-    { try_dup_file(FD_STDIN, exec_prog_io.io_path_stdin, libc::O_RDONLY); }
-
+    {
+        let file_fd = try_get_fd(exec_prog_io.io_path_stdin, libc::O_RDONLY, false);
+        try_dup_fd(file_fd, FD_STDIN);
+    }
+    // Standard output stream redirection
     if !io_path_stdout.is_empty()
-    { try_dup_file(FD_STDOUT, exec_prog_io.io_path_stdout, libc::O_WRONLY); }
+    {
+        let file_fd = try_get_fd(exec_prog_io.io_path_stdout, libc::O_WRONLY, true);
+        try_dup_fd(file_fd, FD_STDOUT);
+        // Duplication of STDERR into a new STDOUT FD
+        if exec_prog_io.io_dup_err_out
+        { try_dup_fd(file_fd, FD_STDERR); }
+    }
+    // Standard error stream redirection (if not redirected to STDOUT)
+    if !io_path_stderr.is_empty() && !exec_prog_io.io_dup_err_out
+    {
+        let file_fd = try_get_fd(exec_prog_io.io_path_stderr, libc::O_WRONLY, true);
+        try_dup_fd(file_fd, FD_STDERR);
+    }
 
-    if exec_prog_io.io_dup_err_out
-    { try_dup_fd(FD_STDOUT, FD_STDERR); }
-    else if !io_path_stderr.is_empty()
-    { try_dup_file(FD_STDERR, exec_prog_io.io_path_stderr, libc::O_WRONLY); }
-
+    /* @A lightweight `dup2` system call wrapper */
     fn try_dup_fd(src_fd: c_int, dst_fd: c_int)
     {
         if unsafe { libc::dup2(src_fd, dst_fd) } == SYS_EXEC_FAILED
         { crate::helper_functions::panic_on_syscall!("dup2"); }
     }
+    /* @/A lightweight `dup2` system call wrapper */
 
-    fn try_dup_file(dst_fd: c_int, file_path: *const c_char, file_flag : c_int)
+    fn try_get_fd(file_path: *const c_char, file_flag : c_int, try_create : bool) -> c_int
     {
+        // Check whether the specified file exists
+        let file_exists = unsafe { libc::access(file_path, libc::F_OK) } == SYS_EXEC_OK;
+
+        // Try to get a Rust string containing a path to file from a C string
+        let file_path_str = match unsafe { CStr::from_ptr(file_path) }.to_str() {
+            Ok(s) => { s }
+            Err(_) => { panic!("Function [try_dup_file] failed: file path C string is corrupted!"); }
+        };
+
+        if try_create
+        {
+            // Try to create (or clear / truncate) a file with the specified path.
+            // If file exists, we need to truncate it (clear its contents) because
+            // stream redirection corrupts file contents if it is not empty.
+            let _file = match File::create(file_path_str) {
+                Ok(obj) => { obj }
+                Err(e) => { panic!("Function [try_dup_file] failed: can't create a file - {}", e.to_string()); }
+            };
+        }
+        else if !file_exists { panic!("Function [try_dup_file] failed: specified file not found!"); }
+
+        // Verify that we can access the file for reading and writing
+        if unsafe { libc::access(file_path, libc::R_OK | libc::W_OK) } != SYS_EXEC_OK
+        { panic!("Function [try_dup_file] failed: specified file is not accessible!"); }
+
         // Note that O_PATH specifies that we don't need to open a file,
         // but only get a descriptor pointing at it to use with `dup2`.
         // Flag O_CREAT indicates that `open` system call must create a
         // file on the specified path, in case it was not found.
-        let file_fd = unsafe { libc::open(file_path, file_flag | libc::O_PATH | libc::O_CREAT) };
+        let file_fd = unsafe { libc::open(file_path, file_flag | libc::O_CREAT) };
 
         // Check whether file opened successfully
         if file_fd == SYS_EXEC_FAILED
         { crate::helper_functions::panic_on_syscall!("open"); }
 
-        // Replace specified file descriptor with new one
-        try_dup_fd(file_fd, dst_fd);
+        // Return a file descriptior pointing to file
+        return file_fd;
     }
 }
 
@@ -140,6 +180,8 @@ pub fn init_set_user_id(exec_prog_info : &ExecProgInfo)
 {
     let username = unsafe { CStr::from_ptr(exec_prog_info.exec_as_user) };
 
+    if username.is_empty() { return; }
+
     // Get PASSWD information about the user behind the username
     let pwnam = unsafe { libc::getpwnam(username.as_ptr()) };
 
@@ -182,11 +224,16 @@ pub fn init_set_kill_timer(period: c_int)
 {
     // We use `MaybeUninit` to allocate C-compatible object based on a struct
     let mut sigev = MaybeUninit::<libc::sigevent>::uninit();
-    let mut timer_id : timer_t = std::ptr::null_mut();
+    let mut timer_id = MaybeUninit::<timer_t>::uninit();
+
+    let period_seconds : libc::time_t = period as libc::time_t / TIME_MULTIPLIER as libc::time_t;
+    let period_nanosec : libc::c_long = (period as libc::c_long) % (TIME_MULTIPLIER as libc::c_long)
+        * ((TIME_MULTIPLIER * TIME_MULTIPLIER) as libc::c_long);
+
     let itimer_spec = libc::itimerspec
     {
         it_interval: libc::timespec { tv_sec: 0, tv_nsec: 0 },
-        it_value: libc::timespec { tv_sec: 0, tv_nsec: period as libc::c_long * 1000000 }
+        it_value: libc::timespec { tv_sec: period_seconds, tv_nsec: period_nanosec }
     };
 
     unsafe {
@@ -195,8 +242,11 @@ pub fn init_set_kill_timer(period: c_int)
         (*sigev_ptr).sigev_notify = libc::SIGEV_SIGNAL;
         (*sigev_ptr).sigev_signo = libc::SIGKILL;
 
-        if libc::timer_create(libc::CLOCK_REALTIME, sigev_ptr, &mut timer_id ) == SYS_EXEC_FAILED
+        if libc::timer_create(libc::CLOCK_REALTIME, sigev_ptr, timer_id.as_mut_ptr() ) == SYS_EXEC_FAILED
         { crate::helper_functions::panic_on_syscall!("timer_create"); }
+
+        let timer_id = timer_id.assume_init();
+        let _sigev = sigev.assume_init();
 
         if libc::timer_settime(timer_id, 0, &itimer_spec, std::ptr::null_mut()) == SYS_EXEC_FAILED
         { crate::helper_functions::panic_on_syscall!("timer_settime"); }
@@ -249,7 +299,7 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
             match ctx.set_action_for_syscall(syscallz::Action::KillProcess, sys_call) {
                 Err(err) => { panic!("Cannot add new SECCOMP filter for system call '{}': {}",
                                      sys_call.into_i32(), err.to_string()) }
-                _ => { /* A new SECCOMP filter successfully added to the current context! */ }
+                Ok(_) => { /* A new SECCOMP filter successfully added to the current context! */ }
             }
         }
     }
@@ -258,6 +308,6 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
     // Try to enforce the SECCOMP policy we built for the current process
     match ctx.load() {
         Err(err) => { panic!("SECCOMP policy enforcement failed: {}", err.to_string()) }
-        _ => { /* SECCOMP context loading finished successfully! */ }
+        Ok(_) => { /* SECCOMP context loading finished successfully! */ }
     }
 }

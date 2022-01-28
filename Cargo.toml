@@ -29,9 +29,12 @@ name = "limtrac"
 path = "src/lib/lib.rs"
 crate-type = ["cdylib"]
 
-[[bin]]
-name = "limtrac"
-path = "src/cli/main.rs"
+#[[bin]]
+#name = "limtrac"
+#path = "src/cli/main.rs"
+
+[build-dependencies]
+cbindgen = "0.20.0"
 
 [dependencies]
 nix = "0.23.1"

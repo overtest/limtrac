@@ -24,3 +24,15 @@ pub const SYS_EXEC_FAILED : c_int = -1;
 pub const SYS_EXEC_OK     : c_int = 0;
 /// cbindgen:ignore
 pub const TIME_MULTIPLIER : c_int = 1000;
+
+/*
+ * Child process kill reasons, used to fill the
+ * `kill_reason` field of `ProcExecResult` struct.
+ */
+
+pub const KILL_REASON_UNSET    : c_int = SYS_EXEC_FAILED;
+pub const KILL_REASON_NONE     : c_int = 0;
+pub const KILL_REASON_SECURITY : c_int = 1;
+pub const KILL_REASON_REALTIME : c_int = 2;
+pub const KILL_REASON_PROCTIME : c_int = 3;
+pub const KILL_REASON_PROCWSET : c_int = 4;

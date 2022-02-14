@@ -16,8 +16,9 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::ffi::{CStr};
+use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
+use std::time;
 use std::time::SystemTime;
 use libc::{c_int, c_ulonglong, pid_t};
 
@@ -27,10 +28,10 @@ mod helper_functions;
 mod request_structs;
 mod result_structs;
 
-use crate::constants::SYS_EXEC_FAILED;
+use crate::constants::{KILL_REASON_NONE, KILL_REASON_PROCTIME, KILL_REASON_PROCWSET, KILL_REASON_REALTIME, KILL_REASON_SECURITY, SYS_EXEC_FAILED, SYS_EXEC_OK};
 use crate::helper_functions::{get_obj_from_ptr};
 use crate::request_structs::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits};
-use crate::result_structs::{ProcExecResult, ProcResUsage};
+use crate::result_structs::ProcExecResult;
 
 #[no_mangle]
 pub extern "C" fn limtrac_execute(
@@ -41,10 +42,10 @@ pub extern "C" fn limtrac_execute(
 ) -> ProcExecResult
 {
     // Try to dereference pointers to structs which contain limtrac execution details
-    let exec_prog_info   : &ExecProgInfo   = get_obj_from_ptr(exec_prog_info_ptr, "exec_prog_info_ptr");
-    let exec_prog_io     : &ExecProgIO     = get_obj_from_ptr(exec_prog_io_ptr, "exec_prog_io_ptr");
+    let exec_prog_info   : &ExecProgInfo   = get_obj_from_ptr(exec_prog_info_ptr,   "exec_prog_info_ptr"  );
+    let exec_prog_io     : &ExecProgIO     = get_obj_from_ptr(exec_prog_io_ptr,     "exec_prog_io_ptr"    );
     let exec_prog_limits : &ExecProgLimits = get_obj_from_ptr(exec_prog_limits_ptr, "exec_prog_limits_ptr");
-    let exec_prog_guard  : &ExecProgGuard  = get_obj_from_ptr(exec_prog_guard_ptr, "exec_prog_guard_ptr");
+    let exec_prog_guard  : &ExecProgGuard  = get_obj_from_ptr(exec_prog_guard_ptr,  "exec_prog_guard_ptr" );
 
     // Verify data contained in `ExecProgInfo` struct
     if !exec_prog_info.verify()
@@ -53,6 +54,27 @@ pub extern "C" fn limtrac_execute(
     // Verify data contained in `ExecProgIO` struct
     if !exec_prog_io.verify()
     { panic!("ExecProgIO struct contains invalid data!"); }
+
+    /*
+     * Unshare system resources so this process and its child
+     * processes won't be able to do some things related to
+     * other processes and actions running in the system.
+     *
+     * Note that some of enforced `unshare` system call
+     * policies require CAP_SYS_ADMIN capability of a caller.
+     */
+    if exec_prog_guard.unshare_common
+    {
+        unsafe {
+            let result = libc::unshare(
+                libc::CLONE_NEWNS | libc::CLONE_NEWIPC
+                | libc::CLONE_NEWUTS | libc::CLONE_NEWPID
+                | libc::CLONE_NEWCGROUP | libc::CLONE_SYSVSEM);
+            // Panic if system call execution failed
+            if result == SYS_EXEC_FAILED
+            { crate::helper_functions::panic_on_syscall!("unshare"); }
+        }
+    }
 
     /*
      * Try to create a new child process based on the current one, so we
@@ -81,50 +103,122 @@ pub extern "C" fn limtrac_execute(
     /* ===== [PARENT] PROCESS CODE FRAGMENT ===== */
 
     /*
-     * [Watchdog thread]
+     * [Watchdog]
      */
 
-    // Clone variables to move them to a thread scope
-    //let thread_child_pid : pid_t = child_pid.clone() as pid_t;
-    //let thread_exec_prog_limits : &ExecProgLimits = exec_prog_limits.clone();
-    // Start a watchdog thread and pass cloned variables to it
-    //std::thread::spawn(move || exec_watchdog(thread_child_pid, thread_exec_prog_limits)).join().unwrap();
+    let mut execution_result  : ProcExecResult = ProcExecResult::new();
+    let     loop_exec_timeout : time::Duration = std::time::Duration::from_millis(10);
 
-    let mut execution_result : ProcExecResult = ProcExecResult::new();
-    let mut execution_rusage : ProcResUsage = ProcResUsage::new();
+    loop {
+        // Use MaybeUninit to initialize variables used by `wait4` system call
+        let mut waitpid_status : MaybeUninit<c_int>        = MaybeUninit::<c_int>::uninit();
+        let mut waitpid_rusage : MaybeUninit<libc::rusage> = MaybeUninit::<libc::rusage>::uninit();
 
-    // Use MaybeUninit to initialize variables used by `wait4` system call
-    let mut waitpid_status = MaybeUninit::<c_int>::uninit();
-    let mut waitpid_rusage = MaybeUninit::<libc::rusage>::uninit();
+        let waitpid_result = unsafe { libc::wait4(child_pid,waitpid_status.as_mut_ptr(), libc::WNOHANG, waitpid_rusage.as_mut_ptr()) };
 
-    // Execute `wait4` system call to wait for child exit
-    let waitpid_result = unsafe { libc::wait4(child_pid, waitpid_status.as_mut_ptr(), 0, waitpid_rusage.as_mut_ptr()) };
+        // Panic on `wait4` system call execution error
+        if waitpid_result == SYS_EXEC_FAILED
+        { crate::helper_functions::panic_on_syscall!("wait4"); }
 
-    if waitpid_result == SYS_EXEC_FAILED
-    { crate::helper_functions::panic_on_syscall!("wait4"); }
+        // Get the child process execution period in milliseconds
+        execution_result.res_usage.real_time = child_time_start.elapsed().unwrap().as_millis() as c_ulonglong;
 
-    // Get the child process execution period in milliseconds
-    execution_rusage.real_time = child_time_start.elapsed().unwrap().as_millis() as c_ulonglong;
+        let waitpid_status : c_int        = unsafe { waitpid_status.assume_init() };
+        let waitpid_rusage : libc::rusage = unsafe { waitpid_rusage.assume_init() };
 
-    let waitpid_status = unsafe { waitpid_status.assume_init() };
-    let waitpid_rusage = unsafe { waitpid_rusage.assume_init() };
+        /* ===== @On child process [executing] ===== */
+        if waitpid_result == 0 {
 
-    // Gather process stats from `rusage` struct
-    execution_rusage.load_rusage(&waitpid_rusage);
+            // Fetch counters' values from the processes `stat` file
+            match execution_result.res_usage.load_proc_stat(child_pid) { Ok(_) => {} Err(_) => { continue; } };
 
-    // Get the reason of child process termination
-    if libc::WIFEXITED(waitpid_status)
-    { execution_result.exit_code = libc::WEXITSTATUS(waitpid_status); }
-    else if libc::WIFSIGNALED(waitpid_status)
-    {
-        execution_result.exit_code = -1;
-        execution_result.exit_sign = libc::WSTOPSIG(waitpid_status);
+            // Wall clock time usage limiting
+            if exec_prog_limits.limit_real_time > 0
+            {
+                if execution_result.res_usage.real_time > exec_prog_limits.limit_real_time
+                { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_REALTIME); continue; }
+            }
+
+            // Processor time usage imiting
+            if exec_prog_limits.limit_proc_time > 0
+            {
+                if execution_result.res_usage.proc_time > exec_prog_limits.limit_proc_time
+                { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_PROCTIME); continue; }
+            }
+
+            // Peak working set usage limiting
+            if exec_prog_limits.limit_proc_wset > 0
+            {
+                if execution_result.res_usage.proc_wset > exec_prog_limits.limit_proc_wset
+                { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_PROCWSET); continue; }
+            }
+
+            fn kill_with_reason(child_pid: pid_t, execution_result: &mut ProcExecResult, kill_reason: c_int)
+            {
+                match kill_pid(child_pid) { _ => { /* Ignore all results, for now. */ } }
+                execution_result.is_killed   = true;
+                execution_result.kill_reason = kill_reason;
+            }
+
+            /*
+             * None of the checks passes, so it seems that the child process
+             * not yet used all of the allowed amout of system resources, so
+             * now we need to continue our loop after a certain timeout.
+             */
+            std::thread::sleep(loop_exec_timeout);
+            continue;
+        }
+        /* ===== /@On child process [executing] ===== */
+
+        /* ===== @On child process [state changed] ===== */
+
+        // Gather process stats from `rusage` struct
+        execution_result.res_usage.load_rusage(&waitpid_rusage);
+
+        // Get the reason of child process termination
+        if libc::WIFEXITED(waitpid_status)
+        {
+            execution_result.exit_code = libc::WEXITSTATUS(waitpid_status);
+            if !execution_result.is_killed {
+                execution_result.exit_sign = SYS_EXEC_OK;
+                execution_result.kill_reason = KILL_REASON_NONE;
+            }
+        }
+        else if libc::WIFSIGNALED(waitpid_status)
+        {
+            execution_result.exit_code = SYS_EXEC_FAILED;
+            execution_result.exit_sign = libc::WTERMSIG(waitpid_status);
+
+            if !execution_result.is_killed
+            {
+                // Handle `SIGSYS` like when child process tries to use forbidden system features.
+                // For example, `seccomp` kernel feature uses `SIGSYS` to kill processes that try
+                // to use system calls, forbidden by the current enforced policy.
+                if execution_result.exit_sign == libc::SIGSYS
+                { execution_result.kill_reason = KILL_REASON_SECURITY; }
+
+                // WALL CLOCK TIME LIMIT
+                else if exec_prog_limits.limit_real_time > 0 && execution_result.res_usage.real_time > exec_prog_limits.limit_real_time
+                { execution_result.kill_reason = KILL_REASON_REALTIME; }
+
+                // PROCESSOR TIME LIMIT
+                else if exec_prog_limits.limit_proc_time > 0 && execution_result.res_usage.proc_time > exec_prog_limits.limit_proc_time
+                { execution_result.kill_reason = KILL_REASON_PROCTIME; }
+
+                // RESIDENT SET SIZE LIMIT
+                else if exec_prog_limits.limit_proc_wset > 0 && execution_result.res_usage.proc_wset > exec_prog_limits.limit_proc_wset
+                { execution_result.kill_reason = KILL_REASON_PROCWSET; }
+
+                execution_result.is_killed = true;
+            }
+        }
+
+        // Exit from the loop, because the child process not exists anymore
+        break;
+
+        /* ===== /@On child process [state changed] ===== */
     }
 
-    /*
-     * Prepare execution results and return them to the caller.
-     */
-    execution_result.res_usage = &mut execution_rusage;
     return execution_result;
 
     /* ===== /[PARENT] PROCESS CODE FRAGMENT ===== */
@@ -136,9 +230,15 @@ fn exec_child_cmd(
     exec_prog_limits : &ExecProgLimits,
     exec_prog_guard  : &ExecProgGuard)
 {
+    let exec_path : &CStr        = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
+    let exec_argv : Vec<CString> = exec_prog_info.get_cstring_argv_vec();
 
-    let exec_path = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
-    let exec_argv = exec_prog_info.get_cstring_argv_vec();//= exec_prog_info.get_program_args_list();
+    // Unshare network namespace (requires CAP_SYS_ADMIN)
+    if exec_prog_guard.unshare_network
+    {
+        if unsafe { libc::unshare(libc::CLONE_NEWNET) } == SYS_EXEC_FAILED
+        { crate::helper_functions::panic_on_syscall!("unshare"); }
+    }
 
     // Change working directory of a child process
     if unsafe { libc::chdir(exec_prog_info.working_path) } == SYS_EXEC_FAILED
@@ -148,10 +248,7 @@ fn exec_child_cmd(
     crate::sandboxing_features::kill_on_parent_exit();
     crate::sandboxing_features::set_resource_limits(exec_prog_limits);
     crate::sandboxing_features::init_set_user_id(exec_prog_info);
-    crate::sandboxing_features::unshare_resources(exec_prog_guard);
     crate::sandboxing_features::redirect_io_streams(exec_prog_io);
-    // TODO: Convert nanosec to sec and nanosec
-    //crate::sandboxing_features::init_set_kill_timer(exec_prog_limits.limit_real_time);
     crate::sandboxing_features::init_secure_computing(exec_prog_guard);
 
     // Try to execute program - on success, `execv` never returns
@@ -162,43 +259,8 @@ fn exec_child_cmd(
     }
 }
 
-fn exec_watchdog(child_pid: pid_t, exec_prog_limits: &ExecProgLimits)
-{
-    let mut res_usage_cur = ProcResUsage::new();
-    loop {
-        // Use MaybeUninit to initialize variables used by `wait4` system call
-        let mut child_rusage = MaybeUninit::<libc::rusage>::uninit();
-        let mut child_status = MaybeUninit::<c_int>::uninit();
-
-        // Try to fetch the current status of child process
-        let child_waitpid = unsafe { libc::wait4(child_pid, child_status.as_mut_ptr(),
-                                                libc::WNOHANG, child_rusage.as_mut_ptr()) };
-        let child_rusage = unsafe { child_rusage.assume_init() };
-        let _child_status = unsafe { child_status.assume_init() };
-
-        // Panic if `waitpid` system call have failed
-        if child_waitpid == SYS_EXEC_FAILED
-        { crate::helper_functions::panic_on_syscall!("waitpid"); }
-        // Break the loop if child process already exited
-        else if child_waitpid != 0 { break; }
-
-        // Load resources usage into easily redable struct
-        res_usage_cur.load_rusage(&child_rusage);
-
-        // Check current resources usage and kill the child if it exceeds the limits
-        // TODO: Use `cgroup` to limit memory usage by the child process
-        if res_usage_cur.proc_time > exec_prog_limits.limit_proc_time as c_ulonglong
-            || res_usage_cur.proc_wset > exec_prog_limits.limit_proc_wset
-        {
-            // Try to kill a child process using `SIGKILL` signal
-            match kill_pid(child_pid) { Err(_) => { break; } Ok(_) => { /* continue on success */ } }
-        }
-    }
-}
-
 fn kill_pid(child_pid: pid_t) -> Result<(), ()>
 {
     let result = unsafe { libc::kill(child_pid, libc::SIGKILL) };
-    if result == SYS_EXEC_FAILED { Err(()) }
-    else { Ok(()) }
+    if result == SYS_EXEC_FAILED { Err(()) } else { Ok(()) }
 }

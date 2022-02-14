@@ -18,7 +18,7 @@
 
 use std::ffi::{CStr, CString};
 use std::path::Path;
-use libc::{c_char, c_int, c_long};
+use libc::{c_char, c_ulong, c_ulonglong};
 use nix::NixPath;
 
 #[repr(C)]
@@ -141,14 +141,14 @@ impl ExecProgIO
 #[repr(C)]
 pub struct ExecProgLimits
 {
-    pub limit_real_time : c_int,  // real execution time
-    pub limit_proc_time : c_int,  // processor time
-    pub limit_proc_wset : c_long, // process working set
+    pub limit_real_time : c_ulonglong, // real execution time
+    pub limit_proc_time : c_ulonglong, // processor time
+    pub limit_proc_wset : c_ulonglong, // process working set
 
-    pub rlimit_enabled  : bool,   // Set RLIMITs
-    pub rlimit_core     : c_int,  // RLIM_CORE
-    pub rlimit_npoc     : c_int,  // RLIM_NPROC
-    pub rlimit_nofile   : c_int   // RLIM_NOFILE
+    pub rlimit_enabled  : bool,    // Set other RLIMITs
+    pub rlimit_core     : c_ulong, // RLIM_CORE
+    pub rlimit_npoc     : c_ulong, // RLIM_NPROC
+    pub rlimit_nofile   : c_ulong  // RLIM_NOFILE
 }
 
 #[repr(C)]
@@ -156,5 +156,6 @@ pub struct ExecProgGuard
 {
     pub scmp_enabled     : bool,
     pub scmp_deny_common : bool,
-    pub unshare_enabled  : bool
+    pub unshare_common   : bool,
+    pub unshare_network  : bool
 }

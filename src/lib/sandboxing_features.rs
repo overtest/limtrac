@@ -18,8 +18,7 @@
 
 use std::ffi::CStr;
 use std::fs::File;
-use std::mem::MaybeUninit;
-use libc::{c_char, c_int, rlimit64, timer_t};
+use libc::{c_char, c_int, c_ulonglong, rlim64_t, rlimit64};
 use nix::errno::errno;
 use nix::NixPath;
 use syscallz::Syscall;
@@ -141,16 +140,26 @@ pub fn set_resource_limits(exec_prog_limits : &ExecProgLimits)
          *
          * P.S. Note that in BSD systems RLIMIT_CPU sets a limit in milliseconds.
          */
-        let limit_in_seconds : c_int;
+        let mut limit_in_seconds : c_ulonglong;
 
-        if (exec_prog_limits.limit_proc_time % TIME_MULTIPLIER) == 0
-        { limit_in_seconds = exec_prog_limits.limit_proc_time / TIME_MULTIPLIER; }
-        else { limit_in_seconds = exec_prog_limits.limit_proc_time / TIME_MULTIPLIER + 1; }
+        if (exec_prog_limits.limit_proc_time % TIME_MULTIPLIER as c_ulonglong) == 0
+        { limit_in_seconds = exec_prog_limits.limit_proc_time / TIME_MULTIPLIER as c_ulonglong; }
+        else { limit_in_seconds = exec_prog_limits.limit_proc_time / TIME_MULTIPLIER as c_ulonglong + 1; }
 
-        set_rlimit(libc::RLIMIT_CPU, limit_in_seconds);
+        /*
+         * In general, we don't want to use hard limit because of some unexpected behaviours
+         * it brings in our librarie's logics. Instead of it, we use soft limiter that fetches
+         * processor time usage information from `/proc/[pid]/stat` file and kills the process
+         * if it exceeds the limit set by the library user.
+         *
+         * But for security reasons, we need to set the hard limit so that the child process
+         * will be killed even if our soft imiter will stuck or something else.
+         */
+        limit_in_seconds = limit_in_seconds + 1;
+
+        set_rlimit(libc::RLIMIT_CPU, limit_in_seconds as libc::rlim64_t);
     }
     /* @/Set total processor time consumption limit */
-    // TODO: Set peak working set and other limits
 
     /* @Set resource limits using `SETRLIMIT` system call */
     if exec_prog_limits.rlimit_enabled
@@ -163,11 +172,9 @@ pub fn set_resource_limits(exec_prog_limits : &ExecProgLimits)
 
     /* @Function that utilizes `setrlimit` system call to set resource limit */
     fn set_rlimit(resource: libc::__rlimit_resource_t,
-                  limit_value : c_int)
+                  limit_value : libc::c_ulong)
     {
-        if limit_value < 0 { return; }
-
-        let rlim_val = limit_value as libc::rlim64_t;
+        let rlim_val : rlim64_t = limit_value as libc::rlim64_t;
         let rlim_dat : rlimit64 = rlimit64 { rlim_cur: rlim_val, rlim_max: rlim_val };
 
         if unsafe { libc::setrlimit64(resource, &rlim_dat) } == SYS_EXEC_FAILED
@@ -193,64 +200,6 @@ pub fn init_set_user_id(exec_prog_info : &ExecProgInfo)
     // Try to execute SETUID system call on the current process
     if unsafe { libc::setuid(user_info.pw_uid) } != 0
     { crate::helper_functions::panic_on_syscall!("setuid"); }
-}
-
-pub fn unshare_resources(exec_prog_guard: &ExecProgGuard)
-{
-    if !exec_prog_guard.unshare_enabled { return; }
-
-    // TIP: For more info about `unshare` system call visit
-    // https://man7.org/linux/man-pages/man2/unshare.2.html
-    unsafe {
-        let result = libc::unshare(libc::CLONE_NEWIPC
-            | libc::CLONE_NEWNET
-            | libc::CLONE_NEWNS
-            | libc::CLONE_NEWUTS
-            | libc::CLONE_SYSVSEM);
-
-        if result == SYS_EXEC_FAILED
-        { crate::helper_functions::panic_on_syscall!("unshare"); }
-    }
-}
-
-/*
- * This function covers setting up a timer based on built-in features of Linux kernel,
- * which after a [period] of time sends a specified signal to the current process.
- * We use it to send SIGKILL signal to kill the child process (user program) after a
- * certain caller-defined period of time.
- */
-
-pub fn init_set_kill_timer(period: c_int)
-{
-    // We use `MaybeUninit` to allocate C-compatible object based on a struct
-    let mut sigev = MaybeUninit::<libc::sigevent>::uninit();
-    let mut timer_id = MaybeUninit::<timer_t>::uninit();
-
-    let period_seconds : libc::time_t = period as libc::time_t / TIME_MULTIPLIER as libc::time_t;
-    let period_nanosec : libc::c_long = (period as libc::c_long) % (TIME_MULTIPLIER as libc::c_long)
-        * ((TIME_MULTIPLIER * TIME_MULTIPLIER) as libc::c_long);
-
-    let itimer_spec = libc::itimerspec
-    {
-        it_interval: libc::timespec { tv_sec: 0, tv_nsec: 0 },
-        it_value: libc::timespec { tv_sec: period_seconds, tv_nsec: period_nanosec }
-    };
-
-    unsafe {
-        let mut sigev_ptr = sigev.as_mut_ptr();
-
-        (*sigev_ptr).sigev_notify = libc::SIGEV_SIGNAL;
-        (*sigev_ptr).sigev_signo = libc::SIGKILL;
-
-        if libc::timer_create(libc::CLOCK_REALTIME, sigev_ptr, timer_id.as_mut_ptr() ) == SYS_EXEC_FAILED
-        { crate::helper_functions::panic_on_syscall!("timer_create"); }
-
-        let timer_id = timer_id.assume_init();
-        let _sigev = sigev.assume_init();
-
-        if libc::timer_settime(timer_id, 0, &itimer_spec, std::ptr::null_mut()) == SYS_EXEC_FAILED
-        { crate::helper_functions::panic_on_syscall!("timer_settime"); }
-    }
 }
 
 /*
@@ -280,15 +229,14 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
             // Deny creating child processes, changing process ownership, etc.
             Syscall::fork, Syscall::vfork, Syscall::clone, Syscall::clone3,
             Syscall::reboot, Syscall::setuid, Syscall::setgid, Syscall::prctl,
-            Syscall::setrlimit, Syscall::prlimit64, // Syscall::getrlimit,
+            Syscall::unshare, Syscall::setrlimit, //Syscall::prlimit64, // Syscall::getrlimit,
 
             // Operations on per-process timer are denied
             Syscall::timer_create, Syscall::timer_gettime, Syscall::timer_settime, Syscall::timer_delete,
             Syscall::timer_getoverrun, Syscall::timerfd_create, Syscall::timerfd_gettime, Syscall::timerfd_settime,
 
-            // Deny using namespaces and unwanted changes to filesystem
-            Syscall::chdir, Syscall::fchdir, Syscall::unshare,
-            Syscall::chmod, Syscall::fchmod, Syscall::fchmodat,
+            // Deny making unwanted changes to filesystem
+            Syscall::chdir, Syscall::fchdir, Syscall::chmod, Syscall::fchmod, Syscall::fchmodat,
             Syscall::chown, Syscall::fchown, Syscall::lchown, Syscall::fchownat
             //Syscall::link, Syscall::unlink
         ];

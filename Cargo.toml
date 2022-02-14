@@ -37,8 +37,9 @@ crate-type = ["cdylib"]
 cbindgen = "0.20.0"
 
 [dependencies]
-nix = "0.23.1"
-libc = "0.2.112"
-syscallz = "0.16.1"
 cgroups-rs = "0.2.8"
+libc = "0.2.117"
+nix = "0.23.1"
+procfs = "0.12.0"
+syscallz = "0.16.1"
 #nanoid = "0.4.0" # Currently, not in use

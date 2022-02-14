@@ -16,18 +16,17 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use libc::{c_int, c_long, c_ulonglong};
-use crate::constants::TIME_MULTIPLIER;
+use libc::{c_int, c_ulonglong};
+use crate::constants::{TIME_MULTIPLIER, KILL_REASON_UNSET};
 
 #[repr(C)]
 pub struct ProcExecResult
 {
-    pub exit_code : c_int,
-    pub exit_sign : c_int,
-    pub res_usage : *mut ProcResUsage,
-
-    pub is_killed : bool,
-    pub kill_reason : c_int
+    pub exit_code   : c_int,
+    pub exit_sign   : c_int,
+    pub is_killed   : bool,
+    pub kill_reason : c_int,
+    pub res_usage   : ProcResUsage
 }
 
 impl ProcExecResult {
@@ -36,9 +35,9 @@ impl ProcExecResult {
         Self {
             exit_code: -1,
             exit_sign: -1,
-            res_usage: std::ptr::null_mut(),
+            res_usage: ProcResUsage::new(),
             is_killed: false,
-            kill_reason: -1
+            kill_reason: KILL_REASON_UNSET
         }
     }
 }
@@ -48,7 +47,7 @@ pub struct ProcResUsage
 {
     pub real_time : c_ulonglong,
     pub proc_time : c_ulonglong,
-    pub proc_wset : c_long
+    pub proc_wset : c_ulonglong
 }
 
 impl ProcResUsage {
@@ -65,9 +64,12 @@ impl ProcResUsage {
     pub fn load_rusage(&mut self, res_usage: &libc::rusage)
     {
         // Processor time usage is a sum of user-space time and kernel time consumed by a process
-        self.proc_time = timeval_to_ms(res_usage.ru_utime) + timeval_to_ms(res_usage.ru_stime);
+        let proc_time : libc::c_ulonglong = timeval_to_ms(res_usage.ru_utime) + timeval_to_ms(res_usage.ru_stime);
+        if proc_time > self.proc_time { self.proc_time = proc_time; }
+
         // On Windows, this called PeakWorkingSet, on Linux - MaxResidentSetSize
-        self.proc_wset = res_usage.ru_maxrss;
+        let proc_wset = res_usage.ru_maxrss as c_ulonglong * 1024;
+        if proc_wset > self.proc_wset { self.proc_wset = proc_wset; }
 
         /* @Function that converts values present in `timeval` structure into milliseconds value */
         fn timeval_to_ms(val: libc::timeval) -> c_ulonglong
@@ -76,5 +78,30 @@ impl ProcResUsage {
                 + (val.tv_usec as c_ulonglong / TIME_MULTIPLIER as c_ulonglong);
         }
         /* @/Function that converts values present in `timeval` structure into milliseconds value */
+    }
+
+    pub fn load_proc_stat(&mut self, child_pid: libc::pid_t) -> Result<(), ()>
+    {
+        let child_proc : procfs::process::Process = match procfs::process::Process::new(child_pid)
+        { Err(_) => { return Err(()); }, Ok(obj) => obj };
+
+        let ticks_per_second : libc::c_longlong = match procfs::ticks_per_second()
+        { Err(_) => { return Err(()); }, Ok(tps) => tps };
+
+        // Load data from process stat file
+        self.proc_time = (child_proc.stat.utime + child_proc.stat.stime) as libc::c_ulonglong +
+            (child_proc.stat.cutime + child_proc.stat.cstime) as libc::c_ulonglong;
+        self.proc_time = ((self.proc_time as libc::c_double / ticks_per_second as libc::c_double)
+            * 1000 as libc::c_double) as libc::c_ulonglong;
+
+        let child_proc_status : procfs::process::Status = match child_proc.status()
+        { Err(_) => { return Err(()); }, Ok(obj) => obj };
+
+        self.proc_wset = match child_proc_status.vmhwm {
+            None => { return Err(()); }
+            Some(value) => value
+        } * 1024 as libc::c_ulonglong;
+
+        Ok(())
     }
 }

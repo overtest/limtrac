@@ -27,11 +27,3 @@ macro_rules! panic_on_syscall {
     };
 }
 pub(crate) use panic_on_syscall;
-
-pub fn get_obj_from_ptr<T>(ptr: *const T, msg: &str) -> &T
-{
-    match unsafe { ptr.as_ref() } {
-        None => { panic!("Couldn't dereference a pointer ({})!", msg); }
-        Some(obj) => obj
-    }
-}

@@ -29,24 +29,17 @@ mod request_structs;
 mod result_structs;
 
 use crate::constants::{KILL_REASON_NONE, KILL_REASON_PROCTIME, KILL_REASON_PROCWSET, KILL_REASON_REALTIME, KILL_REASON_SECURITY, SYS_EXEC_FAILED, SYS_EXEC_OK};
-use crate::helper_functions::{get_obj_from_ptr};
 use crate::request_structs::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits};
 use crate::result_structs::ProcExecResult;
 
 #[no_mangle]
 pub extern "C" fn limtrac_execute(
-    exec_prog_info_ptr   : *const ExecProgInfo,
-    exec_prog_io_ptr     : *const ExecProgIO,
-    exec_prog_limits_ptr : *const ExecProgLimits,
-    exec_prog_guard_ptr  : *const ExecProgGuard
+    exec_prog_info   : ExecProgInfo,
+    exec_prog_io     : ExecProgIO,
+    exec_prog_limits : ExecProgLimits,
+    exec_prog_guard  : ExecProgGuard
 ) -> ProcExecResult
 {
-    // Try to dereference pointers to structs which contain limtrac execution details
-    let exec_prog_info   : &ExecProgInfo   = get_obj_from_ptr(exec_prog_info_ptr,   "exec_prog_info_ptr"  );
-    let exec_prog_io     : &ExecProgIO     = get_obj_from_ptr(exec_prog_io_ptr,     "exec_prog_io_ptr"    );
-    let exec_prog_limits : &ExecProgLimits = get_obj_from_ptr(exec_prog_limits_ptr, "exec_prog_limits_ptr");
-    let exec_prog_guard  : &ExecProgGuard  = get_obj_from_ptr(exec_prog_guard_ptr,  "exec_prog_guard_ptr" );
-
     // Verify data contained in `ExecProgInfo` struct
     if !exec_prog_info.verify()
     { panic!("ExecProgInfo struct contains invalid data!"); }
@@ -96,7 +89,7 @@ pub extern "C" fn limtrac_execute(
     if child_pid == 0
     {
         // We are in a child process right now, so we can execute whatever we want
-        exec_child_cmd(exec_prog_info, exec_prog_io, exec_prog_limits, exec_prog_guard);
+        exec_child_cmd(&exec_prog_info, &exec_prog_io, &exec_prog_limits, &exec_prog_guard);
     }
     /* ===== /[CHILD] PROCESS CODE FRAGMENT ===== */
 
@@ -246,8 +239,8 @@ fn exec_child_cmd(
 
     // Execute various resource limiting and sandboxing functions
     crate::sandboxing_features::kill_on_parent_exit();
-    crate::sandboxing_features::set_resource_limits(exec_prog_limits);
     crate::sandboxing_features::init_set_user_id(exec_prog_info);
+    crate::sandboxing_features::set_resource_limits(exec_prog_limits);
     crate::sandboxing_features::redirect_io_streams(exec_prog_io);
     crate::sandboxing_features::init_secure_computing(exec_prog_guard);
 

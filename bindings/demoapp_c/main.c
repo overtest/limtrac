@@ -12,10 +12,10 @@ int main()
 
     // Execute LIMTRAC runner
     ProcExecResult execResult = limtrac_execute(
-            &execProgInfo,
-            &execProgIo,
-            &execProgLimits,
-            &execProgGuard);
+            execProgInfo,
+            execProgIo,
+            execProgLimits,
+            execProgGuard);
 
     // Print execution result
     printf("Exit code:\t%d\r\nExit signal:\t%d\r\nIs killed:\t%d\r\nKill reason:\t%d\r\n",

@@ -1,0 +1,22 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LimtracDotNet", "LimtracDotNet\LimtracDotNet.csproj", "{47DAAABF-4C7A-4783-83C4-0CDA8CAC2A4E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LimtracDotNet.DemoApp", "LimtracDotNet.DemoApp\LimtracDotNet.DemoApp.csproj", "{53BC5CB5-D004-4156-917E-EBCBD0E63112}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{47DAAABF-4C7A-4783-83C4-0CDA8CAC2A4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{47DAAABF-4C7A-4783-83C4-0CDA8CAC2A4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{47DAAABF-4C7A-4783-83C4-0CDA8CAC2A4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{47DAAABF-4C7A-4783-83C4-0CDA8CAC2A4E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{53BC5CB5-D004-4156-917E-EBCBD0E63112}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{53BC5CB5-D004-4156-917E-EBCBD0E63112}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{53BC5CB5-D004-4156-917E-EBCBD0E63112}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{53BC5CB5-D004-4156-917E-EBCBD0E63112}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

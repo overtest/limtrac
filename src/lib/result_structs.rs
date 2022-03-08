@@ -74,8 +74,8 @@ impl ProcResUsage {
         /* @Function that converts values present in `timeval` structure into milliseconds value */
         fn timeval_to_ms(val: libc::timeval) -> c_ulonglong
         {
-            return (val.tv_sec as c_ulonglong  * TIME_MULTIPLIER as c_ulonglong)
-                + (val.tv_usec as c_ulonglong / TIME_MULTIPLIER as c_ulonglong);
+            (val.tv_sec as c_ulonglong  * TIME_MULTIPLIER as c_ulonglong) +
+                (val.tv_usec as c_ulonglong / TIME_MULTIPLIER as c_ulonglong)
         }
         /* @/Function that converts values present in `timeval` structure into milliseconds value */
     }

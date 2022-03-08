@@ -25,6 +25,41 @@ use syscallz::Syscall;
 use crate::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, SYS_EXEC_FAILED};
 use crate::constants::{SYS_EXEC_OK, TIME_MULTIPLIER};
 
+pub fn unshare_resources(exec_prog_guard : &ExecProgGuard)
+{
+    /*
+     * Unshare system resources so this process and its child
+     * processes won't be able to do some things related to
+     * other processes and actions running in the system.
+     *
+     * Note that some of enforced `unshare` system call
+     * policies require CAP_SYS_ADMIN capability of a caller.
+     */
+    if exec_prog_guard.unshare_common
+    {
+        unsafe {
+            let result = libc::unshare(
+                libc::CLONE_NEWNS | libc::CLONE_NEWIPC
+                    | libc::CLONE_NEWUTS | libc::CLONE_NEWPID
+                    | libc::CLONE_NEWCGROUP | libc::CLONE_SYSVSEM);
+            // Panic if system call execution failed
+            if result == SYS_EXEC_FAILED
+            { crate::helper_functions::panic_on_syscall!("unshare"); }
+        }
+    }
+
+    // Unshare network namespace (requires CAP_SYS_ADMIN)
+    if exec_prog_guard.unshare_network && unsafe { libc::unshare(libc::CLONE_NEWNET) } == SYS_EXEC_FAILED
+    { crate::helper_functions::panic_on_syscall!("unshare"); }
+}
+
+pub fn set_work_dir(exec_prog_info : &ExecProgInfo)
+{
+    // Change working directory of a child process
+    if unsafe { libc::chdir(exec_prog_info.working_path) } == SYS_EXEC_FAILED
+    { crate::helper_functions::panic_on_syscall!("chdir"); }
+}
+
 pub fn kill_on_parent_exit()
 {
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } == SYS_EXEC_FAILED
@@ -95,7 +130,7 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
             // stream redirection corrupts file contents if it is not empty.
             let _file = match File::create(file_path_str) {
                 Ok(obj) => { obj }
-                Err(e) => { panic!("Function [try_dup_file] failed: can't create a file - {}", e.to_string()); }
+                Err(err) => { panic!("Function [try_dup_file] failed: can't create a file - {}", err); }
             };
         }
         else if !file_exists { panic!("Function [try_dup_file] failed: specified file not found!"); }
@@ -115,7 +150,7 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
         { crate::helper_functions::panic_on_syscall!("open"); }
 
         // Return a file descriptior pointing to file
-        return file_fd;
+        file_fd
     }
 }
 
@@ -155,7 +190,7 @@ pub fn set_resource_limits(exec_prog_limits : &ExecProgLimits)
          * But for security reasons, we need to set the hard limit so that the child process
          * will be killed even if our soft imiter will stuck or something else.
          */
-        limit_in_seconds = limit_in_seconds + 1;
+        limit_in_seconds += 1;
 
         set_rlimit(libc::RLIMIT_CPU, limit_in_seconds as libc::rlim64_t);
     }
@@ -218,7 +253,7 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
     // Initialize a new SECCOMP context with defaults to 'Allow' policy
     let mut ctx = match syscallz::Context::init_with_action(syscallz::Action::Allow) {
         Ok(ctx) => ctx,
-        Err(err) => { panic!("Cannot initialize SECCOMP context: {}", err.to_string()) }
+        Err(err) => { panic!("Cannot initialize SECCOMP context: {}", err) }
     };
 
     /* @Prevent process from using common unwanted system calls */
@@ -244,18 +279,13 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
         // Enumerate through common system calls list
         for sys_call in syscalls_list {
             // Add a 'KillProcess' action filter to every single system call in the list
-            match ctx.set_action_for_syscall(syscallz::Action::KillProcess, sys_call) {
-                Err(err) => { panic!("Cannot add new SECCOMP filter for system call '{}': {}",
-                                     sys_call.into_i32(), err.to_string()) }
-                Ok(_) => { /* A new SECCOMP filter successfully added to the current context! */ }
-            }
+            if let Err(err) = ctx.set_action_for_syscall(syscallz::Action::KillProcess, sys_call)
+            { panic!("Cannot add new SECCOMP filter for system call '{}': {}", sys_call.into_i32(), err) }
         }
     }
     /* @/Prevent process from using common unwanted system calls */
 
     // Try to enforce the SECCOMP policy we built for the current process
-    match ctx.load() {
-        Err(err) => { panic!("SECCOMP policy enforcement failed: {}", err.to_string()) }
-        Ok(_) => { /* SECCOMP context loading finished successfully! */ }
-    }
+    if let Err(err) = ctx.load()
+    { panic!("SECCOMP policy enforcement failed: {}", err) }
 }

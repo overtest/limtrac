@@ -32,6 +32,7 @@ use crate::constants::{KILL_REASON_NONE, KILL_REASON_PROCTIME, KILL_REASON_PROCW
 use crate::request_structs::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits};
 use crate::result_structs::ProcExecResult;
 
+//noinspection ALL
 #[no_mangle]
 pub extern "C" fn limtrac_execute(
     exec_prog_info   : ExecProgInfo,
@@ -48,27 +49,17 @@ pub extern "C" fn limtrac_execute(
     if !exec_prog_io.verify()
     { panic!("ExecProgIO struct contains invalid data!"); }
 
-    /*
-     * Unshare system resources so this process and its child
-     * processes won't be able to do some things related to
-     * other processes and actions running in the system.
-     *
-     * Note that some of enforced `unshare` system call
-     * policies require CAP_SYS_ADMIN capability of a caller.
-     */
-    if exec_prog_guard.unshare_common
-    {
-        unsafe {
-            let result = libc::unshare(
-                libc::CLONE_NEWNS | libc::CLONE_NEWIPC
-                | libc::CLONE_NEWUTS | libc::CLONE_NEWPID
-                | libc::CLONE_NEWCGROUP | libc::CLONE_SYSVSEM);
-            // Panic if system call execution failed
-            if result == SYS_EXEC_FAILED
-            { crate::helper_functions::panic_on_syscall!("unshare"); }
-        }
-    }
+    execute_internal(&exec_prog_info, &exec_prog_io, &exec_prog_limits, &exec_prog_guard)
+}
 
+//noinspection ALL
+fn execute_internal(
+    exec_prog_info   : &ExecProgInfo,
+    exec_prog_io     : &ExecProgIO,
+    exec_prog_limits : &ExecProgLimits,
+    exec_prog_guard  : &ExecProgGuard
+) -> ProcExecResult
+{
     /*
      * Try to create a new child process based on the current one, so we
      * can control everything about it in the parent (current) process.
@@ -89,7 +80,7 @@ pub extern "C" fn limtrac_execute(
     if child_pid == 0
     {
         // We are in a child process right now, so we can execute whatever we want
-        exec_child_cmd(&exec_prog_info, &exec_prog_io, &exec_prog_limits, &exec_prog_guard);
+        exec_child_cmd(exec_prog_info, exec_prog_io, exec_prog_limits, exec_prog_guard);
     }
     /* ===== /[CHILD] PROCESS CODE FRAGMENT ===== */
 
@@ -126,29 +117,20 @@ pub extern "C" fn limtrac_execute(
             match execution_result.res_usage.load_proc_stat(child_pid) { Ok(_) => {} Err(_) => { continue; } };
 
             // Wall clock time usage limiting
-            if exec_prog_limits.limit_real_time > 0
-            {
-                if execution_result.res_usage.real_time > exec_prog_limits.limit_real_time
-                { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_REALTIME); continue; }
-            }
+            if exec_prog_limits.limit_real_time > 0 && execution_result.res_usage.real_time > exec_prog_limits.limit_real_time
+            { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_REALTIME); continue; }
 
             // Processor time usage imiting
-            if exec_prog_limits.limit_proc_time > 0
-            {
-                if execution_result.res_usage.proc_time > exec_prog_limits.limit_proc_time
-                { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_PROCTIME); continue; }
-            }
+            if exec_prog_limits.limit_proc_time > 0 && execution_result.res_usage.proc_time > exec_prog_limits.limit_proc_time
+            { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_PROCTIME); continue; }
 
             // Peak working set usage limiting
-            if exec_prog_limits.limit_proc_wset > 0
-            {
-                if execution_result.res_usage.proc_wset > exec_prog_limits.limit_proc_wset
-                { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_PROCWSET); continue; }
-            }
+            if exec_prog_limits.limit_proc_wset > 0 && execution_result.res_usage.proc_wset > exec_prog_limits.limit_proc_wset
+            { kill_with_reason(child_pid, &mut execution_result, KILL_REASON_PROCWSET); continue; }
 
             fn kill_with_reason(child_pid: pid_t, execution_result: &mut ProcExecResult, kill_reason: c_int)
             {
-                match kill_pid(child_pid) { _ => { /* Ignore all results, for now. */ } }
+                match kill_pid(child_pid) { Ok(_) => {  } Err(_) => {  } }
                 execution_result.is_killed   = true;
                 execution_result.kill_reason = kill_reason;
             }
@@ -212,7 +194,7 @@ pub extern "C" fn limtrac_execute(
         /* ===== /@On child process [state changed] ===== */
     }
 
-    return execution_result;
+    execution_result
 
     /* ===== /[PARENT] PROCESS CODE FRAGMENT ===== */
 }
@@ -226,18 +208,9 @@ fn exec_child_cmd(
     let exec_path : &CStr        = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
     let exec_argv : Vec<CString> = exec_prog_info.get_cstring_argv_vec();
 
-    // Unshare network namespace (requires CAP_SYS_ADMIN)
-    if exec_prog_guard.unshare_network
-    {
-        if unsafe { libc::unshare(libc::CLONE_NEWNET) } == SYS_EXEC_FAILED
-        { crate::helper_functions::panic_on_syscall!("unshare"); }
-    }
-
-    // Change working directory of a child process
-    if unsafe { libc::chdir(exec_prog_info.working_path) } == SYS_EXEC_FAILED
-    { crate::helper_functions::panic_on_syscall!("chdir"); }
-
     // Execute various resource limiting and sandboxing functions
+    crate::sandboxing_features::unshare_resources(exec_prog_guard);
+    crate::sandboxing_features::set_work_dir(exec_prog_info);
     crate::sandboxing_features::kill_on_parent_exit();
     crate::sandboxing_features::init_set_user_id(exec_prog_info);
     crate::sandboxing_features::set_resource_limits(exec_prog_limits);
@@ -245,11 +218,8 @@ fn exec_child_cmd(
     crate::sandboxing_features::init_secure_computing(exec_prog_guard);
 
     // Try to execute program - on success, `execv` never returns
-    match nix::unistd::execv(exec_path, exec_argv.as_slice())
-    {
-        Err(err) => { panic!("System call 'execv' failed: {}", err.to_string()); }
-        Ok(_) => { /* this never happens - on success, `exec` never returns by design */ }
-    }
+    if let Err(err) = nix::unistd::execv(exec_path, exec_argv.as_slice())
+    { panic!("System call 'execv' failed: {}", err); }
 }
 
 fn kill_pid(child_pid: pid_t) -> Result<(), ()>

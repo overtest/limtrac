@@ -33,10 +33,10 @@ pub struct ExecProgInfo
 impl ExecProgInfo {
     fn check_ptrs(&self) -> bool
     {
-        return !self.program_path.is_null()
+        !self.program_path.is_null()
             && !self.program_args.is_null()
             && !self.working_path.is_null()
-            && !self.exec_as_user.is_null();
+            && !self.exec_as_user.is_null()
     }
 
     fn check_paths(&self) -> bool
@@ -47,7 +47,7 @@ impl ExecProgInfo {
 
     pub fn verify(&self) -> bool
     {
-        return self.check_ptrs() && self.check_paths();
+        self.check_ptrs() && self.check_paths()
     }
 
     pub fn get_cstring_argv_vec(&self) -> Vec<CString>
@@ -60,10 +60,10 @@ impl ExecProgInfo {
         let args_str_append = unsafe { CStr::from_ptr(self.program_args) }.to_str().unwrap();
 
         // Form a string containing all program command line arguments (including argv[0])
-        let args_str = args_str_base.clone() + " " + args_str_append;
+        let args_str = args_str_base + " " + args_str_append;
         let args_str = args_str.trim_end(); // trim end in case of empty arguments list
         // Split an `args_str` into a vector containing substrings (words / arguments)
-        let args_vec = args_str.split(" ").collect::<Vec<&str>>();
+        let args_vec = args_str.split(' ').collect::<Vec<&str>>();
 
         let mut cstring_vec : Vec<CString> = vec![];
 
@@ -73,7 +73,7 @@ impl ExecProgInfo {
             cstring_vec.push(CString::new(arg).unwrap());
         }
 
-        return cstring_vec;
+        cstring_vec
     }
 }
 
@@ -91,9 +91,9 @@ impl ExecProgIO
 {
     fn check_ptrs(&self) -> bool
     {
-        return !self.io_path_stdin.is_null()
+        !self.io_path_stdin.is_null()
             && !self.io_path_stdout.is_null()
-            && !self.io_path_stderr.is_null();
+            && !self.io_path_stderr.is_null()
     }
 
     pub fn verify(&self) -> bool
@@ -134,7 +134,7 @@ impl ExecProgIO
         { return false; }
 
         // All checks passed
-        return true;
+        true
     }
 }
 

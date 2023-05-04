@@ -65,7 +65,7 @@ dotnet publish # for release builds
 
 ```
 LIMTRAC, a part of Overtest free software project.
-Copyright (C) 2021-2022, Yurii Kadirov <contact@sirkadirov.com>
+Copyright (C) 2021-2023, Yurii Kadirov <contact@sirkadirov.com>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU Lesser General Public License as

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net6.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>disable</Nullable>
+        <LangVersion>default</LangVersion>
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+        <PackageVersion>0.2.0</PackageVersion>
+        <Authors>Yurii Kadirov</Authors>
+        <PackageProjectUrl>https://github.com/overtest/limtrac</PackageProjectUrl>
+        <PackageLicenseUrl>https://github.com/overtest/limtrac/blob/develop/LICENSE.md</PackageLicenseUrl>
+        <RepositoryUrl>https://github.com/overtest/limtrac</RepositoryUrl>
+        <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+        <Product>liblimtrac binding for .NET</Product>
+        <AssemblyVersion>0.2.0</AssemblyVersion>
+        <FileVersion>0.2.0</FileVersion>
+        <RootNamespace>Sirkadirov.Libraries.Limtrac</RootNamespace>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <Content Include="..\..\..\target\release\liblimtrac.so">
+        <Link>liblimtrac.so</Link>
+        <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+
+</Project>

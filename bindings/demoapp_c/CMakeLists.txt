@@ -3,10 +3,10 @@ project(demo_c C)
 
 set(CMAKE_C_STANDARD 11)
 
-link_directories(../../target/debug/)
+link_directories(../../target/release/)
 
 add_executable(demo_c
-        ../../bindings/limtrac.h
+        ../limtrac.h
         main.c)
 
 target_link_libraries(demo_c liblimtrac.so)

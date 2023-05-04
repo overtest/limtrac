@@ -1,6 +1,6 @@
 /*
  * LIMTRAC, a part of Overtest free software project.
- * Copyright (C) 2021-2022, Yurii Kadirov <contact@sirkadirov.com>
+ * Copyright (C) 2021-2023, Yurii Kadirov <contact@sirkadirov.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
@@ -16,7 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr};
 use std::mem::MaybeUninit;
 use std::time;
 use std::time::SystemTime;
@@ -81,6 +81,7 @@ fn execute_internal(
     {
         // We are in a child process right now, so we can execute whatever we want
         exec_child_cmd(exec_prog_info, exec_prog_io, exec_prog_limits, exec_prog_guard);
+        panic!("Something went wrong - this statement must be unreachable!")
     }
     /* ===== /[CHILD] PROCESS CODE FRAGMENT ===== */
 
@@ -91,14 +92,15 @@ fn execute_internal(
      */
 
     let mut execution_result  : ProcExecResult = ProcExecResult::new();
-    let     loop_exec_timeout : time::Duration = std::time::Duration::from_millis(10);
+    let     loop_exec_timeout : time::Duration = std::time::Duration::from_millis(50);
 
     loop {
         // Use MaybeUninit to initialize variables used by `wait4` system call
-        let mut waitpid_status : MaybeUninit<c_int>        = MaybeUninit::<c_int>::uninit();
-        let mut waitpid_rusage : MaybeUninit<libc::rusage> = MaybeUninit::<libc::rusage>::uninit();
+        let mut waitpid_status = MaybeUninit::<c_int>::uninit();
+        let mut waitpid_rusage = MaybeUninit::<libc::rusage>::uninit();
 
-        let waitpid_result = unsafe { libc::wait4(child_pid,waitpid_status.as_mut_ptr(), libc::WNOHANG, waitpid_rusage.as_mut_ptr()) };
+        let waitpid_result = unsafe { libc::wait4(child_pid,waitpid_status.as_mut_ptr(),
+                                                  libc::WNOHANG, waitpid_rusage.as_mut_ptr()) };
 
         // Panic on `wait4` system call execution error
         if waitpid_result == SYS_EXEC_FAILED
@@ -107,14 +109,14 @@ fn execute_internal(
         // Get the child process execution period in milliseconds
         execution_result.res_usage.real_time = child_time_start.elapsed().unwrap().as_millis() as c_ulonglong;
 
-        let waitpid_status : c_int        = unsafe { waitpid_status.assume_init() };
-        let waitpid_rusage : libc::rusage = unsafe { waitpid_rusage.assume_init() };
+        let waitpid_status = unsafe { waitpid_status.assume_init() };
+        let waitpid_rusage = unsafe { waitpid_rusage.assume_init() };
 
         /* ===== @On child process [executing] ===== */
         if waitpid_result == 0 {
 
             // Fetch counters' values from the processes `stat` file
-            match execution_result.res_usage.load_proc_stat(child_pid) { Ok(_) => {} Err(_) => { continue; } };
+            if execution_result.res_usage.load_proc_stat(child_pid).is_err() { continue }
 
             // Wall clock time usage limiting
             if exec_prog_limits.limit_real_time > 0 && execution_result.res_usage.real_time > exec_prog_limits.limit_real_time
@@ -130,7 +132,7 @@ fn execute_internal(
 
             fn kill_with_reason(child_pid: pid_t, execution_result: &mut ProcExecResult, kill_reason: c_int)
             {
-                match kill_pid(child_pid) { Ok(_) => {  } Err(_) => {  } }
+                unsafe { libc::kill(child_pid, libc::SIGKILL) };
                 execution_result.is_killed   = true;
                 execution_result.kill_reason = kill_reason;
             }
@@ -205,25 +207,19 @@ fn exec_child_cmd(
     exec_prog_limits : &ExecProgLimits,
     exec_prog_guard  : &ExecProgGuard)
 {
-    let exec_path : &CStr        = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
-    let exec_argv : Vec<CString> = exec_prog_info.get_cstring_argv_vec();
+    let exec_path = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
+    let exec_argv = exec_prog_info.get_cstring_argv_vec();
 
     // Execute various resource limiting and sandboxing functions
-    crate::sandboxing_features::unshare_resources(exec_prog_guard);
-    crate::sandboxing_features::set_work_dir(exec_prog_info);
-    crate::sandboxing_features::kill_on_parent_exit();
-    crate::sandboxing_features::init_set_user_id(exec_prog_info);
-    crate::sandboxing_features::set_resource_limits(exec_prog_limits);
-    crate::sandboxing_features::redirect_io_streams(exec_prog_io);
-    crate::sandboxing_features::init_secure_computing(exec_prog_guard);
+    sandboxing_features::unshare_resources(exec_prog_guard);
+    sandboxing_features::set_work_dir(exec_prog_info);
+    sandboxing_features::kill_on_parent_exit();
+    sandboxing_features::init_set_user_id(exec_prog_info);
+    sandboxing_features::set_resource_limits(exec_prog_limits);
+    sandboxing_features::redirect_io_streams(exec_prog_io);
+    sandboxing_features::init_secure_computing(exec_prog_guard);
 
     // Try to execute program - on success, `execv` never returns
     if let Err(err) = nix::unistd::execv(exec_path, exec_argv.as_slice())
     { panic!("System call 'execv' failed: {}", err); }
-}
-
-fn kill_pid(child_pid: pid_t) -> Result<(), ()>
-{
-    let result = unsafe { libc::kill(child_pid, libc::SIGKILL) };
-    if result == SYS_EXEC_FAILED { Err(()) } else { Ok(()) }
 }

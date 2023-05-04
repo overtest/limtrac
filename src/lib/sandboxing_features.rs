@@ -1,6 +1,6 @@
 /*
  * LIMTRAC, a part of Overtest free software project.
- * Copyright (C) 2021-2022, Yurii Kadirov <contact@sirkadirov.com>
+ * Copyright (C) 2021-2023, Yurii Kadirov <contact@sirkadirov.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
@@ -19,8 +19,6 @@
 use std::ffi::CStr;
 use std::fs::File;
 use libc::{c_char, c_int, c_ulonglong, rlim64_t, rlimit64};
-use nix::errno::errno;
-use nix::NixPath;
 use syscallz::Syscall;
 use crate::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, SYS_EXEC_FAILED};
 use crate::constants::{SYS_EXEC_OK, TIME_MULTIPLIER};
@@ -63,7 +61,7 @@ pub fn set_work_dir(exec_prog_info : &ExecProgInfo)
 pub fn kill_on_parent_exit()
 {
     if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL) } == SYS_EXEC_FAILED
-    { panic!("System call 'PRCTL' failed with 'ERRNO = {}'!", errno()); }
+    { crate::helper_functions::panic_on_syscall!("prctl"); }
 }
 
 /*
@@ -82,14 +80,16 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
     let io_path_stdin = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdin) };
     let io_path_stdout = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdout) };
     let io_path_stderr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stderr) };
+
     // Standard input stream redirection
-    if !io_path_stdin.is_empty()
+    if io_path_stdin.to_bytes().is_empty()
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stdin, libc::O_RDONLY, false);
         try_dup_fd(file_fd, FD_STDIN);
     }
+
     // Standard output stream redirection
-    if !io_path_stdout.is_empty()
+    if !io_path_stdout.to_bytes().is_empty()
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stdout, libc::O_WRONLY, true);
         try_dup_fd(file_fd, FD_STDOUT);
@@ -97,8 +97,9 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
         if exec_prog_io.io_dup_err_out
         { try_dup_fd(file_fd, FD_STDERR); }
     }
+
     // Standard error stream redirection (if not redirected to STDOUT)
-    if !io_path_stderr.is_empty() && !exec_prog_io.io_dup_err_out
+    if !io_path_stderr.to_bytes().is_empty() && !exec_prog_io.io_dup_err_out
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stderr, libc::O_WRONLY, true);
         try_dup_fd(file_fd, FD_STDERR);
@@ -192,7 +193,7 @@ pub fn set_resource_limits(exec_prog_limits : &ExecProgLimits)
          */
         limit_in_seconds += 1;
 
-        set_rlimit(libc::RLIMIT_CPU, limit_in_seconds as libc::rlim64_t);
+        set_rlimit(libc::RLIMIT_CPU, limit_in_seconds as rlim64_t);
     }
     /* @/Set total processor time consumption limit */
 
@@ -209,7 +210,7 @@ pub fn set_resource_limits(exec_prog_limits : &ExecProgLimits)
     fn set_rlimit(resource: libc::__rlimit_resource_t,
                   limit_value : libc::c_ulong)
     {
-        let rlim_val : rlim64_t = limit_value as libc::rlim64_t;
+        let rlim_val : rlim64_t = limit_value as rlim64_t;
         let rlim_dat : rlimit64 = rlimit64 { rlim_cur: rlim_val, rlim_max: rlim_val };
 
         if unsafe { libc::setrlimit64(resource, &rlim_dat) } == SYS_EXEC_FAILED
@@ -222,7 +223,7 @@ pub fn init_set_user_id(exec_prog_info : &ExecProgInfo)
 {
     let username = unsafe { CStr::from_ptr(exec_prog_info.exec_as_user) };
 
-    if username.is_empty() { return; }
+    if username.to_bytes().is_empty() { return; }
 
     // Get PASSWD information about the user behind the username
     let pwnam = unsafe { libc::getpwnam(username.as_ptr()) };
@@ -262,7 +263,6 @@ pub fn init_secure_computing(exec_prog_guard : &ExecProgGuard)
         // Generate a list of common unwanted system calls
         let syscalls_list = [
             // Deny creating child processes, changing process ownership, etc.
-            Syscall::fork, Syscall::vfork, Syscall::clone, Syscall::clone3,
             Syscall::reboot, Syscall::setuid, Syscall::setgid, Syscall::prctl,
             Syscall::unshare, Syscall::setrlimit, //Syscall::prlimit64, // Syscall::getrlimit,
 

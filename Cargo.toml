@@ -1,5 +1,5 @@
 # LIMTRAC, a part of Overtest free software project.
-# Copyright (C) 2021-2022, Yurii Kadirov <contact@sirkadirov.com>
+# Copyright (C) 2021-2023, Yurii Kadirov <contact@sirkadirov.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as
@@ -17,8 +17,8 @@
 [package]
 publish = false
 name = "limtrac"
-version = "0.2.0"
-edition = "2018"
+version = "0.3.0"
+edition = "2021"
 homepage = "https://overtest.github.io/limtrac/"
 repository = "https://github.com/overtest/limtrac/"
 
@@ -34,12 +34,10 @@ crate-type = ["cdylib"]
 #path = "src/cli/main.rs"
 
 [build-dependencies]
-cbindgen = "0.20.0"
+cbindgen = "0.24.3"
 
 [dependencies]
-cgroups-rs = "0.2.8"
-libc = "0.2.117"
-nix = "0.23.1"
-procfs = "0.12.0"
-syscallz = "0.16.1"
-#nanoid = "0.4.0" # Currently, not in use
+libc = "0.2.142"
+nix = "0.26.2"
+procfs = "0.15.1"
+syscallz = "0.16.2"

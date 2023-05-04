@@ -1,6 +1,6 @@
 /*
  * LIMTRAC, a part of Overtest free software project.
- * Copyright (C) 2021-2022, Yurii Kadirov <contact@sirkadirov.com>
+ * Copyright (C) 2021-2023, Yurii Kadirov <contact@sirkadirov.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as
@@ -19,7 +19,6 @@
 use std::ffi::{CStr, CString};
 use std::path::Path;
 use libc::{c_char, c_ulong, c_ulonglong};
-use nix::NixPath;
 
 #[repr(C)]
 pub struct ExecProgInfo
@@ -80,8 +79,8 @@ impl ExecProgInfo {
 #[repr(C)]
 pub struct ExecProgIO
 {
-    pub io_redirected  : bool,
-    pub io_path_stdin  : *const c_char,
+    pub io_redirected : bool,
+    pub io_path_stdin : *const c_char,
     pub io_path_stdout : *const c_char,
     pub io_path_stderr : *const c_char,
     pub io_dup_err_out : bool
@@ -114,9 +113,9 @@ impl ExecProgIO
          * see that IO redirection feature
          * is enabled by the LIMTRAC caller.
          */
-        if fpath_stdin.is_empty()
-            && fpath_stdout.is_empty()
-            && fpath_stderr.is_empty()
+        if fpath_stdin.to_bytes().is_empty()
+            && fpath_stdout.to_bytes().is_empty()
+            && fpath_stderr.to_bytes().is_empty()
         { return false; }
 
         /*
@@ -125,12 +124,12 @@ impl ExecProgIO
          * whether stdout is redirected to a file.
          */
         if self.io_dup_err_out
-            && (!fpath_stderr.is_empty()
-            || fpath_stdout.is_empty())
+            && (!fpath_stderr.to_bytes().is_empty()
+            || fpath_stdout.to_bytes().is_empty())
         { return false; }
 
         // If STDIN redirection is enabled, input file must be present
-        if !fpath_stdin.is_empty() && !Path::new(fpath_stdin.to_str().unwrap()).is_file()
+        if !fpath_stdin.to_bytes().is_empty() && !Path::new(fpath_stdin.to_str().unwrap()).is_file()
         { return false; }
 
         // All checks passed
@@ -145,17 +144,17 @@ pub struct ExecProgLimits
     pub limit_proc_time : c_ulonglong, // processor time
     pub limit_proc_wset : c_ulonglong, // process working set
 
-    pub rlimit_enabled  : bool,    // Set other RLIMITs
-    pub rlimit_core     : c_ulong, // RLIM_CORE
-    pub rlimit_npoc     : c_ulong, // RLIM_NPROC
-    pub rlimit_nofile   : c_ulong  // RLIM_NOFILE
+    pub rlimit_enabled : bool,    // Set other RLIMITs
+    pub rlimit_core : c_ulong, // RLIM_CORE
+    pub rlimit_npoc : c_ulong, // RLIM_NPROC
+    pub rlimit_nofile : c_ulong  // RLIM_NOFILE
 }
 
 #[repr(C)]
 pub struct ExecProgGuard
 {
-    pub scmp_enabled     : bool,
+    pub scmp_enabled : bool,
     pub scmp_deny_common : bool,
-    pub unshare_common   : bool,
-    pub unshare_network  : bool
+    pub unshare_common : bool,
+    pub unshare_network : bool
 }

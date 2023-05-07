@@ -28,9 +28,9 @@ mod helper_functions;
 mod request_structs;
 mod result_structs;
 
-use crate::constants::{KILL_REASON_NONE, KILL_REASON_PROCTIME, KILL_REASON_PROCWSET, KILL_REASON_REALTIME, KILL_REASON_SECURITY, SYS_EXEC_FAILED, SYS_EXEC_OK};
-use crate::request_structs::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits};
-use crate::result_structs::ProcExecResult;
+pub use crate::constants::{KILL_REASON_NONE, KILL_REASON_PROCTIME, KILL_REASON_PROCWSET, KILL_REASON_REALTIME, KILL_REASON_SECURITY, SYS_EXEC_FAILED, SYS_EXEC_OK};
+pub use crate::request_structs::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits};
+pub use crate::result_structs::ProcExecResult;
 
 //noinspection ALL
 #[no_mangle]

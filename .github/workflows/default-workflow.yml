@@ -21,7 +21,7 @@ jobs:
               run: rustup component add clippy
             
             - name: Install native dependencies
-              run: apt install -y libseccomp-dev seccomp
+              run: sudo apt install -y libseccomp-dev seccomp
             
             - name: Execute Clippy check on source code
               uses: actions-rs/clippy-check@v1
@@ -30,7 +30,7 @@ jobs:
                 args: --all-features
             
             - name: Build library Rust project
-              run: cargo build --release --verbose
+              run: cargo build --release
             
             - name: Build .NET binding of the library
               run: dotnet build --configuration Release

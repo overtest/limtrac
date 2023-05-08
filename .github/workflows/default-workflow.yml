@@ -1,0 +1,55 @@
+name: Build and publish workflow
+on:
+  push:
+    branches: [ develop ]
+  pull_request:
+    branches: [ develop ]
+jobs:
+    publish:
+        name: build, pack & publish
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Git repository of the project
+              uses: actions/checkout@v2
+              with:
+                submodules: 'recursive'
+            
+            - name: Add Github Packages Nuget registry
+              run: dotnet nuget add source --username sirkadirov --password ${{secrets.GITHUB_TOKEN}} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/overtest/index.json"
+            
+            - name: Install Clippy component using RustUp
+              run: rustup component add clippy
+            
+            - name: Execute Clippy check on source code
+              uses: actions-rs/clippy-check@v1
+              with:
+                token: ${{ secrets.GITHUB_TOKEN }}
+                args: --all-features
+            
+            - name: Build library Rust project
+              run: cargo build --release --verbose
+            
+            - name: Build .NET binding of the library
+              run: dotnet build --configuration Release
+              working-directory: bindings/LimtracDotNet/LimtracDotNet/
+            
+            - name: Upload Linux library artifact
+              uses: actions/upload-artifact@v3
+              with:
+                name: liblimtrac.so
+                path: target/release/liblimtrac.so
+            
+            - name: Upload Rust library artifact
+              uses: actions/upload-artifact@v3
+              with:
+                name: liblimtrac.so
+                path: target/release/liblimtrac.rlib
+            
+            - name: Upload .NET library binding artifact
+              uses: actions/upload-artifact@v3
+              with:
+                name: LimtracDotNet.nupkg
+                path: bindings/LimtracDotNet/LimtracDotNet/bin/Release/*.nupkg
+            
+            - name: Publish NuGet package of .NET binding to GitHub Packages
+              run: dotnet nuget push bindings/LimtracDotNet/LimtracDotNet/bin/Release/*.nupkg --source "github"

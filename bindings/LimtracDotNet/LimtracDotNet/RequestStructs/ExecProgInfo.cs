@@ -12,4 +12,6 @@ public struct ExecProgInfo
     [MarshalAs(UnmanagedType.LPUTF8Str)] public string program_args = "";
     [MarshalAs(UnmanagedType.LPUTF8Str)] public string working_path = "";
     [MarshalAs(UnmanagedType.LPUTF8Str)] public string exec_as_user = "";
+
+    public ExecProgInfo() { }
 }

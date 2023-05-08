@@ -27,7 +27,7 @@ repository = "https://github.com/overtest/limtrac/"
 [lib]
 name = "limtrac"
 path = "src/lib/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["lib", "cdylib"]
 
 #[[bin]]
 #name = "limtrac"

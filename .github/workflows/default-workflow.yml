@@ -56,3 +56,4 @@ jobs:
             
             - name: Publish NuGet package of .NET binding to GitHub Packages
               run: dotnet nuget push bindings/LimtracDotNet/LimtracDotNet/bin/Release/*.nupkg --source "github"
+              continue-on-error: true

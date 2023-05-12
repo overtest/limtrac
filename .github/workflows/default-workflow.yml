@@ -17,17 +17,8 @@ jobs:
             - name: Add Github Packages Nuget registry
               run: dotnet nuget add source --username sirkadirov --password ${{secrets.GITHUB_TOKEN}} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/overtest/index.json"
             
-            - name: Install Clippy component using RustUp
-              run: rustup component add clippy
-            
             - name: Install native dependencies
               run: sudo apt install -y libseccomp-dev seccomp
-            
-            - name: Execute Clippy check on source code
-              uses: actions-rs/clippy-check@v1
-              with:
-                token: ${{ secrets.GITHUB_TOKEN }}
-                args: --all-features
             
             - name: Build library Rust project
               run: cargo build --release

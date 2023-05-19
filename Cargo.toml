@@ -37,7 +37,7 @@ crate-type = ["lib", "cdylib"]
 cbindgen = "0.24.3"
 
 [dependencies]
-libc = "0.2.142"
+libc = "0.2.144"
 nix = "0.26.2"
 procfs = "0.15.1"
 syscallz = "0.16.2"

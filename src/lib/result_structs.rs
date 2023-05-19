@@ -99,9 +99,13 @@ impl ProcResUsage {
         let child_proc_status : procfs::process::Status = match child_proc.status()
         { Ok(s) => s, Err(_) => return Err(())};
 
-        //self.proc_wset = child_proc_status.vmhwm.unwrap() * 1024 as c_ulonglong;
-        self.proc_wset = child_proc_status.vmpeak.unwrap_or_else(
-            || child_proc_status.vmhwm.unwrap()) * 1024 as c_ulonglong;
+        self.proc_wset = match child_proc_status.vmpeak {
+            Some(val) => val,
+            None => match child_proc_status.vmhwm {
+                Some(val) => val,
+                None => return Err(())
+            }
+        };
 
         Ok(())
     }

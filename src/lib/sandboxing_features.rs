@@ -16,7 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 use std::fs::File;
 use libc::{c_char, c_int, c_ulonglong, rlim64_t, rlimit64, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use syscallz::Syscall;
@@ -78,27 +78,41 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
     let io_path_stderr : &CStr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stderr) };
 
     // Standard input stream redirection
-    if io_path_stdin.to_bytes().is_empty()
+    if !io_path_stdin.to_bytes().is_empty()
     {
-        let file_fd = try_get_fd(exec_prog_io.io_path_stdin, libc::O_RDONLY, false);
+        let file_fd = try_get_fd(exec_prog_io.io_path_stdin, libc::O_RDONLY);
         try_dup_fd(file_fd, STDIN_FILENO);
     }
+    else { dup_to_dev_null(STDIN_FILENO); }
 
     // Standard output stream redirection
     if !io_path_stdout.to_bytes().is_empty()
     {
-        let file_fd = try_get_fd(exec_prog_io.io_path_stdout, libc::O_WRONLY, true);
+        let file_fd = try_get_fd(exec_prog_io.io_path_stdout, libc::O_WRONLY);
         try_dup_fd(file_fd, STDOUT_FILENO);
+        
         // Duplication of STDERR into a new STDOUT FD
         if exec_prog_io.io_dup_err_out
         { try_dup_fd(file_fd, STDERR_FILENO); }
     }
+    else { dup_to_dev_null(STDOUT_FILENO); }
 
     // Standard error stream redirection (if not redirected to STDOUT)
-    if !io_path_stderr.to_bytes().is_empty() && !exec_prog_io.io_dup_err_out
+    if !exec_prog_io.io_dup_err_out
     {
-        let file_fd = try_get_fd(exec_prog_io.io_path_stderr, libc::O_WRONLY, true);
-        try_dup_fd(file_fd, STDERR_FILENO);
+        if !io_path_stderr.to_bytes().is_empty()
+        {
+            let file_fd = try_get_fd(exec_prog_io.io_path_stderr, libc::O_WRONLY);
+            try_dup_fd(file_fd, STDERR_FILENO);
+        }
+        else { dup_to_dev_null(STDERR_FILENO); }
+    }
+
+    fn dup_to_dev_null(dest_fd: c_int)
+    {
+        let dev_null = CString::new("/dev/null").unwrap();
+        let file_fd = try_get_fd(dev_null.as_ptr(), libc::O_RDWR);
+        try_dup_fd(file_fd, dest_fd);
     }
 
     /* @A lightweight `dup2` system call wrapper */
@@ -109,32 +123,11 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
     }
     /* @/A lightweight `dup2` system call wrapper */
 
-    fn try_get_fd(file_path: *const c_char, file_flag : c_int, try_create : bool) -> c_int
+    fn try_get_fd(file_path: *const c_char, file_flag : c_int) -> c_int
     {
-        // Check whether the specified file exists
-        let file_exists = unsafe { libc::access(file_path, libc::F_OK) } == SYS_EXEC_OK;
-
-        // Try to get a Rust string containing a path to file from a C string
-        let file_path_str = match unsafe { CStr::from_ptr(file_path) }.to_str() {
-            Ok(s) => { s }
-            Err(_) => { panic!("Function [try_dup_file] failed: file path C string is corrupted!"); }
-        };
-
-        if try_create
-        {
-            // Try to create (or clear / truncate) a file with the specified path.
-            // If file exists, we need to truncate it (clear its contents) because
-            // stream redirection corrupts file contents if it is not empty.
-            let _file = match File::create(file_path_str) {
-                Ok(obj) => { obj }
-                Err(err) => { panic!("Function [try_dup_file] failed: can't create a file - {}", err); }
-            };
-        }
-        else if !file_exists { panic!("Function [try_dup_file] failed: specified file not found!"); }
-
         // Verify that we can access the file for reading and writing
         if unsafe { libc::access(file_path, libc::R_OK | libc::W_OK) } != SYS_EXEC_OK
-        { panic!("Function [try_dup_file] failed: specified file is not accessible!"); }
+        { panic!("Function [try_get_fd] failed: specified file is not accessible!"); }
 
         // Note that O_PATH specifies that we don't need to open a file,
         // but only get a descriptor pointing at it to use with `dup2`.

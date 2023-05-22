@@ -16,7 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::ffi::{CStr};
+use std::ffi::{CStr, CString};
 use std::mem::MaybeUninit;
 use std::time;
 use std::time::SystemTime;
@@ -76,12 +76,15 @@ fn execute_internal(
     // Use `ptrace` syscall to ensure that the child process exits
     // on parent process crash: https://linux.die.net/man/2/ptrace
 
+    let exec_path_normal = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
+    let exec_argv_normal = exec_prog_info.get_cstring_argv_vec();
+
     /* ===== [CHILD] PROCESS CODE FRAGMENT ===== */
     if child_pid == 0
     {
         // We are in a child process right now, so we can execute whatever we want
-        exec_child_cmd(exec_prog_info, exec_prog_io, exec_prog_limits, exec_prog_guard);
-        panic!("Something went wrong - this statement must be unreachable!")
+        exec_child_cmd(exec_prog_info, exec_prog_io, exec_prog_limits,
+                       exec_prog_guard, exec_path_normal, exec_argv_normal);
     }
     /* ===== /[CHILD] PROCESS CODE FRAGMENT ===== */
 
@@ -205,11 +208,10 @@ fn exec_child_cmd(
     exec_prog_info   : &ExecProgInfo,
     exec_prog_io     : &ExecProgIO,
     exec_prog_limits : &ExecProgLimits,
-    exec_prog_guard  : &ExecProgGuard)
+    exec_prog_guard  : &ExecProgGuard,
+    exec_path_normal : &CStr,
+    exec_argv_normal : Vec<CString>)
 {
-    let exec_path = unsafe { CStr::from_ptr(exec_prog_info.program_path) };
-    let exec_argv = exec_prog_info.get_cstring_argv_vec();
-
     // Execute various resource limiting and sandboxing functions
     sandboxing_features::unshare_resources(exec_prog_guard);
     sandboxing_features::set_work_dir(exec_prog_info);
@@ -219,7 +221,10 @@ fn exec_child_cmd(
     sandboxing_features::redirect_io_streams(exec_prog_io);
     sandboxing_features::init_secure_computing(exec_prog_guard);
 
-    // Try to execute program - on success, `execv` never returns
-    if let Err(err) = nix::unistd::execv(exec_path, exec_argv.as_slice())
-    { panic!("System call 'execv' failed: {}", err); }
+    // Try to execute program using EXECV
+    if nix::unistd::execv(exec_path_normal, exec_argv_normal.as_slice()).is_ok()
+    { /* EXECV never returns */ }
+
+    // Exit with status code 100 on error
+    unsafe { libc::exit(100 as c_int); }
 }

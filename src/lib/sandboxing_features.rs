@@ -18,7 +18,7 @@
 
 use std::ffi::CStr;
 use std::fs::File;
-use libc::{c_char, c_int, c_ulonglong, rlim64_t, rlimit64};
+use libc::{c_char, c_int, c_ulonglong, rlim64_t, rlimit64, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use syscallz::Syscall;
 use crate::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, SYS_EXEC_FAILED};
 use crate::constants::{SYS_EXEC_OK, TIME_MULTIPLIER};
@@ -73,36 +73,32 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
 {
     if !exec_prog_io.io_redirected { return; }
 
-    const FD_STDIN : c_int = 0;
-    const FD_STDOUT : c_int = 1;
-    const FD_STDERR : c_int = 2;
-
-    let io_path_stdin = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdin) };
-    let io_path_stdout = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdout) };
-    let io_path_stderr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stderr) };
+    let io_path_stdin  : &CStr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdin) };
+    let io_path_stdout : &CStr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stdout) };
+    let io_path_stderr : &CStr = unsafe { CStr::from_ptr(exec_prog_io.io_path_stderr) };
 
     // Standard input stream redirection
     if io_path_stdin.to_bytes().is_empty()
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stdin, libc::O_RDONLY, false);
-        try_dup_fd(file_fd, FD_STDIN);
+        try_dup_fd(file_fd, STDIN_FILENO);
     }
 
     // Standard output stream redirection
     if !io_path_stdout.to_bytes().is_empty()
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stdout, libc::O_WRONLY, true);
-        try_dup_fd(file_fd, FD_STDOUT);
+        try_dup_fd(file_fd, STDOUT_FILENO);
         // Duplication of STDERR into a new STDOUT FD
         if exec_prog_io.io_dup_err_out
-        { try_dup_fd(file_fd, FD_STDERR); }
+        { try_dup_fd(file_fd, STDERR_FILENO); }
     }
 
     // Standard error stream redirection (if not redirected to STDOUT)
     if !io_path_stderr.to_bytes().is_empty() && !exec_prog_io.io_dup_err_out
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stderr, libc::O_WRONLY, true);
-        try_dup_fd(file_fd, FD_STDERR);
+        try_dup_fd(file_fd, STDERR_FILENO);
     }
 
     /* @A lightweight `dup2` system call wrapper */

@@ -17,7 +17,6 @@
  */
 
 use std::ffi::{CStr, CString};
-use std::fs::File;
 use libc::{c_char, c_int, c_ulonglong, rlim64_t, rlimit64, STDERR_FILENO, STDIN_FILENO, STDOUT_FILENO};
 use syscallz::Syscall;
 use crate::{ExecProgGuard, ExecProgInfo, ExecProgIO, ExecProgLimits, SYS_EXEC_FAILED};
@@ -90,7 +89,7 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
     {
         let file_fd = try_get_fd(exec_prog_io.io_path_stdout, libc::O_WRONLY);
         try_dup_fd(file_fd, STDOUT_FILENO);
-        
+
         // Duplication of STDERR into a new STDOUT FD
         if exec_prog_io.io_dup_err_out
         { try_dup_fd(file_fd, STDERR_FILENO); }
@@ -125,10 +124,6 @@ pub fn redirect_io_streams(exec_prog_io : &ExecProgIO)
 
     fn try_get_fd(file_path: *const c_char, file_flag : c_int) -> c_int
     {
-        // Verify that we can access the file for reading and writing
-        if unsafe { libc::access(file_path, libc::R_OK | libc::W_OK) } != SYS_EXEC_OK
-        { panic!("Function [try_get_fd] failed: specified file is not accessible!"); }
-
         // Note that O_PATH specifies that we don't need to open a file,
         // but only get a descriptor pointing at it to use with `dup2`.
         // Flag O_CREAT indicates that `open` system call must create a
